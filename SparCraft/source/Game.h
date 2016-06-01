@@ -4,14 +4,10 @@
 #include "GameState.h"
 #include "Player.h"
 #include "AllPlayers.h"
-#include "UnitAction.hpp"
+#include "Action.h"
 #include "UnitScriptData.h"
 #include <memory>
 #include "Timer.h"
-
-#ifdef USING_VISUALIZATION_LIBRARIES
-	#include "Display.h"
-#endif
 
 namespace SparCraft
 {
@@ -35,33 +31,32 @@ protected:
 
 	// moves array to store moves in
 	MoveArray moves[2];
-	std::vector<UnitAction> scriptMoves[2];
+	std::vector<Action> scriptMoves[2];
+
+    
 
 public:
 	
-#ifdef USING_VISUALIZATION_LIBRARIES
-	Display *			disp;
-#endif
-
 	// game constructor
 	Game(const GameState & initialState, PlayerPtr & p1, PlayerPtr & p2, const size_t & limit);
     Game(const GameState & initialState, const size_t & limit);
 
 	void            play();
+    void            playNextTurn();
     void            playIndividualScripts(UnitScriptData & scriptsChosen);
 	void            storeHistory(const bool & store);
-	bool            gameOver();
+	bool            gameOver() const;
+    
 
 	ScoreType       eval(const IDType & evalMethod) const;
 
 	GameState &     getState();
+    const GameState &     getState() const;
 	int             getRounds();
 	double          getTime();
 	const IDType    getPlayerToMove();
+    PlayerPtr       getPlayer(const IDType & player);
 
-#ifdef USING_VISUALIZATION_LIBRARIES
-    void setDisplay(Display * d);
-#endif
 };
 
 

@@ -246,7 +246,7 @@ void SearchExperiment::parseConfigFile(const std::string & filename)
             iss >> upgradeName;
             iss >> upgradeLevel;
 
-            for (BWAPI::UpgradeType & type : BWAPI::UpgradeTypes::allUpgradeTypes())
+            for (const BWAPI::UpgradeType & type : BWAPI::UpgradeTypes::allUpgradeTypes())
             {
                 if (type.getName().compare(upgradeName) == 0)
                 {
@@ -263,7 +263,7 @@ void SearchExperiment::parseConfigFile(const std::string & filename)
             iss >> playerID;
             iss >> techName;
 
-            for (BWAPI::TechType & type : BWAPI::TechTypes::allTechTypes())
+            for (const BWAPI::TechType & type : BWAPI::TechTypes::allTechTypes())
             {
                 if (type.getName().compare(techName) == 0)
                 {
@@ -402,7 +402,7 @@ BWAPI::UnitType SearchExperiment::getUnitType(const std::string & unitTypeString
 {
     BWAPI::UnitType type;
 
-    for (BWAPI::UnitType & t : BWAPI::UnitTypes::allUnitTypes())
+    for (const BWAPI::UnitType & t : BWAPI::UnitTypes::allUnitTypes())
     {
         if (t.getName().compare(unitTypeString) == 0)
         {
@@ -673,7 +673,7 @@ GameState SearchExperiment::getSymmetricState( std::vector<std::string> & unitTy
     for (size_t i(0); i<unitTypes.size(); ++i)
     {
         BWAPI::UnitType type;
-        for (BWAPI::UnitType & t : BWAPI::UnitTypes::allUnitTypes())
+        for (const BWAPI::UnitType & t : BWAPI::UnitTypes::allUnitTypes())
         {
             if (t.getName().compare(unitTypes[i]) == 0)
             {
@@ -711,7 +711,7 @@ void SearchExperiment::addSeparatedState(  std::vector<std::string> & unitTypes,
     for (size_t i(0); i<unitTypes.size(); ++i)
     {
         BWAPI::UnitType type;
-        for (BWAPI::UnitType & t : BWAPI::UnitTypes::allUnitTypes())
+        for (const BWAPI::UnitType & t : BWAPI::UnitTypes::allUnitTypes())
         {
             if (t.getName().compare(unitTypes[i]) == 0)
             {
@@ -838,10 +838,10 @@ void SearchExperiment::runExperiment()
     }
 
 	#ifdef USING_VISUALIZATION_LIBRARIES
-		Display * disp = NULL;
+		GUI * disp = NULL;
         if (showDisplay)
         {
-            disp = new Display(map ? map->getBuildTileWidth() : 40, map ? map->getBuildTileHeight() : 22);
+            disp = new GUI(map ? map->getBuildTileWidth() : 40, map ? map->getBuildTileHeight() : 22);
             disp->SetImageDir(imageDir);
             disp->OnStart();
 		    disp->LoadMapTexture(map, 19);
@@ -890,18 +890,24 @@ void SearchExperiment::runExperiment()
 
 				// construct the game
 				Game g(states[state], playerOne, playerTwo, 20000);
-				#ifdef USING_VISUALIZATION_LIBRARIES
-                    if (showDisplay)
-                    {
-					    g.disp = disp;
-                        disp->SetExpDesc(getExpDescription(p1Player, p2Player, state));
-                    }
-				#endif
+                ScoreType gameEval = 0;
 
-				// play the game to the end
-				g.play();
-				
-				ScoreType gameEval = g.getState().eval(Players::Player_One, SparCraft::EvaluationMethods::LTD2).val();
+                if (showDisplay)
+                {
+					static GUI gui(1280, 720);
+                    gui.setGame(g);
+
+                    while (!gui.getGame().gameOver())
+                    {
+                        gui.onFrame();
+                    }
+
+                    gameEval = gui.getGame().getState().eval(Players::Player_One, SparCraft::EvaluationMethods::LTD2).val();
+                }
+                else
+                {
+                    gameEval = g.getState().eval(Players::Player_One, SparCraft::EvaluationMethods::LTD2).val();
+                }
 
                 numGames[p1Player][p2Player]++;
                 if (gameEval > 0)

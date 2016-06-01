@@ -38,6 +38,11 @@ GameState::GameState()
 	_numMovements.fill(0);
     _prevHPSum.fill(0);
 
+    _units[0] = std::vector<Unit>(Constants::Max_Units, Unit());
+    _units[1] = std::vector<Unit>(Constants::Max_Units, Unit());
+    _unitIndex[0] = std::vector<int>(Constants::Max_Units, 0);
+    _unitIndex[1] = std::vector<int>(Constants::Max_Units, 0);
+
 	for (size_t u(0); u<_maxUnits; ++u)
 	{
         _unitIndex[0][u] = u;
@@ -146,10 +151,25 @@ void GameState::generateMoves(MoveArray & moves, const IDType & playerIndex) con
 			for (IDType u(0); u<_numUnits[enemyPlayer]; ++u)
 			{
 				const Unit & enemyUnit(getUnit(enemyPlayer, u));
-				if (unit.canAttackTarget(enemyUnit, _currentTime) && enemyUnit.isAlive())
+				bool invisible = false;
+				if (enemyUnit.type().hasPermanentCloak())
 				{
-					moves.add(UnitAction(unitIndex, playerIndex, UnitActionTypes::ATTACK, u));
-                    //moves.add(UnitAction(unitIndex, playerIndex, UnitActionTypes::ATTACK, unit.ID()));
+					invisible = true;
+					for (IDType detectorIndex(0); detectorIndex < _numUnits[playerIndex]; ++detectorIndex)
+					{
+						// unit reference
+						const Unit & detector(getUnit(playerIndex, detectorIndex));
+						if (detector.type().isDetector() && detector.canSeeTarget(enemyUnit, _currentTime))
+						{
+							invisible = false;
+							break;
+						}
+					}
+				}
+				if (!invisible && unit.canAttackTarget(enemyUnit, _currentTime) && enemyUnit.isAlive())
+				{
+					moves.add(Action(unitIndex, playerIndex, ActionTypes::ATTACK, u));
+                    //moves.add(Action(unitIndex, playerIndex, ActionTypes::ATTACK, unit.ID()));
 				}
 			}
 		}
@@ -166,8 +186,8 @@ void GameState::generateMoves(MoveArray & moves, const IDType & playerIndex) con
 				const Unit & ourUnit(getUnit(playerIndex, u));
 				if (unit.canHealTarget(ourUnit, _currentTime) && ourUnit.isAlive())
 				{
-					moves.add(UnitAction(unitIndex, playerIndex, UnitActionTypes::HEAL, u));
-                    //moves.add(UnitAction(unitIndex, playerIndex, UnitActionTypes::HEAL, unit.ID()));
+					moves.add(Action(unitIndex, playerIndex, ActionTypes::HEAL, u));
+                    //moves.add(Action(unitIndex, playerIndex, ActionTypes::HEAL, unit.ID()));
 				}
 			}
 		}
@@ -176,7 +196,7 @@ void GameState::generateMoves(MoveArray & moves, const IDType & playerIndex) con
 		{
 			if (!unit.canHeal())
 			{
-				moves.add(UnitAction(unitIndex, playerIndex, UnitActionTypes::RELOAD, 0));
+				moves.add(Action(unitIndex, playerIndex, ActionTypes::RELOAD, 0));
 			}
 		}
 		
@@ -193,7 +213,7 @@ void GameState::generateMoves(MoveArray & moves, const IDType & playerIndex) con
             double defaultMoveDuration      = (double)Constants::Move_Distance / unit.speed();
 
             // if we can currently attack
-            double chosenTime               = std::min(timeUntilAttack, defaultMoveDuration);
+			double chosenTime = timeUntilAttack != 0 ? std::min(timeUntilAttack, defaultMoveDuration) : defaultMoveDuration;
 
             // the chosen movement distance
             PositionType moveDistance       = (PositionType)(chosenTime * unit.speed());
@@ -201,7 +221,8 @@ void GameState::generateMoves(MoveArray & moves, const IDType & playerIndex) con
             // DEBUG: If chosen move distance is ever 0, something is wrong
             if (moveDistance == 0)
             {
-                System::FatalError("Move Action with distance 0 generated");
+                System::FatalError("Move Action with distance 0 generated. timeUntilAttack:"+
+					std::to_string(timeUntilAttack)+", speed:"+std::to_string(unit.speed()));
             }
 
             // we are only generating moves in the cardinal direction specified in common.h
@@ -222,7 +243,7 @@ void GameState::generateMoves(MoveArray & moves, const IDType & playerIndex) con
                 if (isWalkable(dest) || (unit.type().isFlyer() && isFlyable(dest)))
 				{
                     // add the move to the MoveArray
-					moves.add(UnitAction(unitIndex, playerIndex, UnitActionTypes::MOVE, d, dest));
+					moves.add(Action(unitIndex, playerIndex, ActionTypes::MOVE, d, dest));
 				}
 			}
 		}
@@ -230,13 +251,13 @@ void GameState::generateMoves(MoveArray & moves, const IDType & playerIndex) con
 		// if no moves were generated for this unit, it must be issued a 'PASS' move
 		if (moves.numMoves(unitIndex) == 0)
 		{
-			moves.add(UnitAction(unitIndex, playerIndex, UnitActionTypes::PASS, 0));
+			moves.add(Action(unitIndex, playerIndex, ActionTypes::PASS, 0));
 		}
 	}
 }
 
 
-void GameState::makeMoves(const std::vector<UnitAction> & moves)
+void GameState::makeMoves(const std::vector<Action> & moves)
 {    
     if (moves.size() > 0)
     {
@@ -250,20 +271,20 @@ void GameState::makeMoves(const std::vector<UnitAction> & moves)
     
     for (size_t m(0); m<moves.size(); ++m)
     {
-        performUnitAction(moves[m]);
+        performAction(moves[m]);
     }
 }
 
-void GameState::performUnitAction(const UnitAction & move)
+void GameState::performAction(const Action & move)
 {
-	Unit & ourUnit		= getUnit(move._player, move._unit);
+	Unit & ourUnit		= getUnit(move.player(), move.unit());
 	IDType player		= ourUnit.player();
 	IDType enemyPlayer  = getEnemy(player);
 
-	if (move._moveType == UnitActionTypes::ATTACK)
+	if (move.type() == ActionTypes::ATTACK)
 	{
-		Unit & enemyUnit(getUnit(enemyPlayer,move._moveIndex));
-        //Unit & enemyUnit(getUnitByID(enemyPlayer ,move._moveIndex));
+		Unit & enemyUnit(getUnit(enemyPlayer,move.index()));
+        //Unit & enemyUnit(getUnitByID(enemyPlayer ,move.index()));
 			
 		// attack the unit
 		ourUnit.attack(move, enemyUnit, _currentTime);
@@ -281,15 +302,15 @@ void GameState::performUnitAction(const UnitAction & move)
 			}
 		}			
 	}
-	else if (move._moveType == UnitActionTypes::MOVE)
+	else if (move.type() == ActionTypes::MOVE)
 	{
 		_numMovements[player]++;
 
 		ourUnit.move(move, _currentTime);
 	}
-	else if (move._moveType == UnitActionTypes::HEAL)
+	else if (move.type() == ActionTypes::HEAL)
 	{
-		Unit & ourOtherUnit(getUnit(player,move._moveIndex));
+		Unit & ourOtherUnit(getUnit(player,move.index()));
 			
 		// attack the unit
 		ourUnit.heal(move, ourOtherUnit, _currentTime);
@@ -299,11 +320,11 @@ void GameState::performUnitAction(const UnitAction & move)
 			ourOtherUnit.takeHeal(ourUnit);
 		}
 	}
-	else if (move._moveType == UnitActionTypes::RELOAD)
+	else if (move.type() == ActionTypes::RELOAD)
 	{
 		ourUnit.waitUntilAttack(move, _currentTime);
 	}
-	else if (move._moveType == UnitActionTypes::PASS)
+	else if (move.type() == ActionTypes::PASS)
 	{
 		ourUnit.pass(move, _currentTime);
 	}
@@ -322,7 +343,7 @@ const Unit & GameState::getUnitByID(const IDType & unitID) const
 		}
 	}
 
-    System::FatalError("GameState Error: getUnitByID() Unit not found");
+	System::FatalError("GameState Error: getUnitByID() Unit not found, id:" + std::to_string(unitID));
 	return getUnit(0,0);
 }
 
@@ -336,7 +357,7 @@ const Unit & GameState::getUnitByID(const IDType & player, const IDType & unitID
 		}
 	}
 
-	System::FatalError("GameState Error: getUnitByID() Unit not found");
+	System::FatalError("GameState Error: getUnitByID() Unit not found, player:"+std::to_string(player)+" id:" + std::to_string(unitID));
 	return getUnit(0,0);
 }
 
@@ -350,7 +371,7 @@ Unit & GameState::getUnitByID(const IDType & player, const IDType & unitID)
 		}
 	}
 
-	System::FatalError("GameState Error: getUnitByID() Unit not found");
+	System::FatalError("GameState Error: getUnitByID() Unit not found, player:" + std::to_string(player) + " id:" + std::to_string(unitID));
 	return getUnit(0,0);
 }
 
@@ -410,7 +431,7 @@ const Unit & GameState::getClosestOurUnit(const IDType & player, const IDType & 
 	return getUnit(player, minUnitInd);
 }
 
-const Unit & GameState::getClosestEnemyUnit(const IDType & player, const IDType & unitIndex)
+const Unit & GameState::getClosestEnemyUnit(const IDType & player, const IDType & unitIndex, bool checkCloaked)
 {
 	const IDType enemyPlayer(getEnemy(player));
 	const Unit & myUnit(getUnit(player,unitIndex));
@@ -424,6 +445,24 @@ const Unit & GameState::getClosestEnemyUnit(const IDType & player, const IDType 
 	for (IDType u(0); u<_numUnits[enemyPlayer]; ++u)
 	{
         Unit & enemyUnit(getUnit(enemyPlayer, u));
+		if (checkCloaked&& enemyUnit.type().hasPermanentCloak())
+		{
+			bool invisible = true;
+			for (IDType detectorIndex(0); detectorIndex < _numUnits[player]; ++detectorIndex)
+			{
+				// unit reference
+				const Unit & detector(getUnit(player, detectorIndex));
+				if (detector.type().isDetector() && detector.canSeeTarget(enemyUnit, _currentTime))
+				{
+					invisible = false;
+					break;
+				}
+			}
+			if (invisible)
+			{
+				continue;
+			}
+		}
         PositionType distSq = myUnit.getDistanceSqToUnit(enemyUnit, _currentTime);
 
 		if ((distSq < minDist))// || ((distSq == minDist) && (enemyUnit.ID() < minUnitID)))
@@ -988,6 +1027,62 @@ void GameState::print(int indent) const
 		}
 	}
 	fprintf(stderr, "\n\n");
+}
+
+std::string GameState::toString() const
+{
+
+	std::stringstream ss;
+
+	ss << calculateHash(0) << "\n";
+	ss << "Time: " << _currentTime << std::endl;
+
+	for (IDType p(0); p<Constants::Num_Players; ++p)
+	{
+		for (UnitCountType u(0); u<_numUnits[p]; ++u)
+		{
+			const Unit & unit(getUnit(p, u));
+
+			ss << "  P" << (int)unit.player() << " " << unit.currentHP() << " (" << unit.x() << ", " << unit.y() << ") " << unit.name() << std::endl;
+		}
+	}
+	ss << std::endl;
+
+	return ss.str();
+}
+
+std::string GameState::toStringCompact() const
+{
+	std::stringstream ss;
+
+	for (IDType p(0); p<Constants::Num_Players; ++p)
+	{
+        std::map<BWAPI::UnitType, size_t> typeCount;
+
+		for (UnitCountType u(0); u<_numUnits[p]; ++u)
+		{
+			const Unit & unit(getUnit(p, u));
+
+            if (typeCount.find(unit.type()) != std::end(typeCount))
+            {
+                typeCount[unit.type()]++;
+            }
+            else
+            {
+                typeCount[unit.type()] = 1;
+            }
+		}
+
+        for (auto & kv : typeCount)
+        {
+            const BWAPI::UnitType & type = kv.first;
+            const size_t count = kv.second;
+
+            ss << "P" << (int)p << " " << count << " " << type.getName() << "\n";
+        }
+	}
+
+	return ss.str();
 }
 
 void GameState::write(const std::string & filename) const

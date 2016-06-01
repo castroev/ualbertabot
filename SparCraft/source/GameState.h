@@ -19,8 +19,11 @@ class GameState
 {
     Map *                                                           _map;               
 
-    Array2D<Unit, Constants::Num_Players, Constants::Max_Units>     _units;             
-    Array2D<int, Constants::Num_Players, Constants::Max_Units>      _unitIndex;        
+    std::vector<Unit> _units[Constants::Num_Players];
+    std::vector<int>  _unitIndex[Constants::Num_Players];
+
+    Array2D<Unit, Constants::Num_Players, Constants::Max_Units>     _units2;             
+    Array2D<int, Constants::Num_Players, Constants::Max_Units>      _unitIndex2;        
     Array<Unit, 1>                                                  _neutralUnits;
 
     Array<UnitCountType, Constants::Num_Players>                    _numUnits;
@@ -40,7 +43,7 @@ class GameState
     const bool              checkFull(const IDType & player)                                        const;
     const bool              checkUniqueUnitIDs()                                                    const;
 
-    void                    performUnitAction(const UnitAction & theMove);
+    void                    performAction(const Action & theMove);
 
 public:
 
@@ -70,7 +73,7 @@ public:
           Unit &            getUnit(const IDType & player, const UnitCountType & unitIndex);
     const Unit &            getUnitByID(const IDType & player, const IDType & unitID)               const;
           Unit &            getUnitByID(const IDType & player, const IDType & unitID);
-    const Unit &            getClosestEnemyUnit(const IDType & player, const IDType & unitIndex);
+    const Unit &            getClosestEnemyUnit(const IDType & player, const IDType & unitIndex, bool checkCloaked=false);
     const Unit &            getClosestOurUnit(const IDType & player, const IDType & unitIndex);
     const Unit &            getUnitDirect(const IDType & player, const IDType & unit)               const;
     const Unit &            getNeutralUnit(const size_t & u)                                        const;
@@ -99,7 +102,7 @@ public:
 
     // move related functions
     void                    generateMoves(MoveArray & moves, const IDType & playerIndex)            const;
-    void                    makeMoves(const std::vector<UnitAction> & moves);
+    void                    makeMoves(const std::vector<Action> & moves);
     const int &             getNumMovements(const IDType & player)                                  const;
     const IDType            whoCanMove()                                                            const;
     const bool              bothCanMove()                                                           const;
@@ -115,6 +118,8 @@ public:
 
     // state i/o functions
     void                    print(int indent = 0) const;
+	std::string             toString() const;
+    std::string             toStringCompact() const;
     void                    write(const std::string & filename)                                     const;
     void                    read(const std::string & filename);
 };

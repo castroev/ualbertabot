@@ -3,7 +3,10 @@
 using namespace BOSS;
 
 BuildingStatus::BuildingStatus() 
-: _timeRemaining(0) 
+: _type(ActionTypes::None)
+, _timeRemaining(0) 
+, _isConstructing(ActionTypes::None)
+, _addon(ActionTypes::None)
 {
 	
 }
@@ -11,6 +14,7 @@ BuildingStatus::BuildingStatus()
 BuildingStatus::BuildingStatus(const ActionType & action, const ActionType & addon) 
 : _type(action)
 , _timeRemaining(0) 
+, _isConstructing(ActionTypes::None)
 , _addon(addon)
 {
 }
@@ -25,14 +29,25 @@ BuildingStatus::BuildingStatus(const ActionType & action, FrameCountType time, c
 
 const bool BuildingStatus::canBuildEventually(const ActionType & action) const
 {
-    if (action.whatBuildsActionType() != _type)
+    if (!_type.canBuild(action))
     {
         return false;
     }
 
-    if (action.isAddon() && (_addon != ActionTypes::None))
+    // if the type is an addon
+    if (action.isAddon())
     {
-        return false;
+        // if we already have an addon we can't build it
+        if (_addon != ActionTypes::None)
+        {
+            return false;
+        }
+
+        // if we are building an addon we can't ever build it
+        if (_timeRemaining > 0 && _isConstructing.isAddon())
+        {
+            return false;
+        }
     }
 
     if (action.requiresAddon() && (_addon != action.requiredAddonType()))
@@ -41,6 +56,12 @@ const bool BuildingStatus::canBuildEventually(const ActionType & action) const
         {
             return false;
         }
+    }
+
+    // if the built type is morphed and we are morphing something, we won't be able to build it
+    if (action.isMorphed() && (_timeRemaining > 0) && (_isConstructing.isMorphed()))
+    {
+        return false;
     }
 
     return true;
@@ -53,7 +74,7 @@ const bool BuildingStatus::canBuildNow(const ActionType & action) const
         return false;
     }
 
-    if (action.whatBuildsActionType() != _type)
+    if (!_type.canBuild(action))
     {
         return false;
     }
@@ -82,18 +103,30 @@ void BuildingStatus::fastForward(const FrameCountType frames)
 {
     // if we fastforward more than the current time remaining, we will complete the action
     bool willComplete = _timeRemaining <= frames;
+    int timeWasRemaining = _timeRemaining;
+    const std::string & name = _type.getName();
 
-    if (willComplete)
+    if ((_timeRemaining > 0) && willComplete)
     {
+        BOSS_ASSERT(_isConstructing != ActionTypes::None, "We can't be building a unit without a type %s %d", _type.getName().c_str(), timeWasRemaining);
+
         _timeRemaining = 0;
 
         // if it's building an addon, add it
-        if (_isConstructing != ActionTypes::None && _isConstructing.isAddon())
+        if (_isConstructing.isAddon())
         {
             _addon = _isConstructing;
         }
+
+        // if we are finishing a morphed type, it becomes that type
+        if (_isConstructing.isMorphed())
+        {
+            _type = _isConstructing;
+        }
+
+        _isConstructing = ActionTypes::None;
     }
-    else
+    else if (_timeRemaining > 0)
     {
         _timeRemaining -= frames;
     }
@@ -108,24 +141,25 @@ const size_t & BuildingData::size() const
     return _buildings.size();
 }
 
-void BuildingData::morphBuilding(const ActionType & from, const ActionType & to)
-{
-    for (size_t i(0); i<_buildings.size(); ++i)
-	{
-        if (_buildings[i]._type == from)
-        {
-            
-            _buildings[i]._type = to;
-            return;
-        }
-    }
-}
-
 void BuildingData::addBuilding(const ActionType & action, const ActionType & addon)
 {
 	BOSS_ASSERT(action.isBuilding(), "Trying to add a non-building to the building data");
 	
     _buildings.push_back(BuildingStatus(action, addon));
+}
+
+void BuildingData::removeBuilding(const ActionType & action, const ActionType & addon)
+{
+	BOSS_ASSERT(action.isBuilding(), "Trying to remove a non-building from the building data");
+
+	for (size_t i = 0; i < _buildings.size(); i++)
+	{
+		if (_buildings[i]._type == action)
+		{
+			_buildings.remove(i);
+			break;
+		}
+	}
 }
 
 void BuildingData::addBuilding(const ActionType & action, const FrameCountType timeUntilFree, const ActionType & constructing, const ActionType & addon)
@@ -158,31 +192,9 @@ const FrameCountType BuildingData::getTimeUntilCanBuild(const ActionType & actio
         }
     }
 
+
     BOSS_ASSERT(minset, "Min was not set");
     return min;
-}
-
-// gets the time until building of type t is free
-// this will only ever be called if t exists, so min will always be set to a lower value
-FrameCountType BuildingData::timeUntilFree(const ActionType & action) const
-{
-    BOSS_ASSERT(_buildings.size() > 0, "Called timeUntilFree on empty building data");
-
-    bool minset = false;
-	FrameCountType min = 0;
-	
-	for (size_t i=0; i<_buildings.size(); ++i)
-	{
-		if (_buildings[i]._type == action && (!minset || _buildings[i]._timeRemaining < min))
-		{
-			min = _buildings[i]._timeRemaining;
-            minset = true;
-		}
-	}
-		
-	BOSS_ASSERT(minset, "No min was set");
-	
-	return min;
 }
 
 void BuildingData::queueAction(const ActionType & action)
@@ -207,6 +219,23 @@ void BuildingData::fastForwardBuildings(const FrameCountType frames)
 	{
         _buildings[i].fastForward(frames);
 	}
+}
+
+std::string BuildingData::toString() const
+{
+    std::stringstream ss;
+    ss << "Buildings\n\n";
+
+    for (size_t i=0; i<_buildings.size(); ++i)
+	{
+        const BuildingStatus & b = _buildings[i];
+        ss << b._type.getName() << "   "; 
+        ss << b._timeRemaining << "   "; 
+        ss << (b._isConstructing != ActionTypes::None ? b._isConstructing.getName() : "None") << "   ";
+        ss << (b._addon != ActionTypes::None ? b._addon.getName() : "None") << "\n";
+    }
+
+    return ss.str();
 }
 	
 const bool BuildingData::canBuildNow(const ActionType & action) const

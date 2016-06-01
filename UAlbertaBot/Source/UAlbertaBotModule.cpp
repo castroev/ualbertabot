@@ -12,193 +12,143 @@
 
 #include "Common.h"
 #include "UAlbertaBotModule.h"
+#include "JSONTools.h"
+#include "ParseUtils.h"
+#include "UnitUtil.h"
 
 using namespace UAlbertaBot;
 
-//BWAPI::AIModule * __NewAIModule()
-//{
-//	return new UAlbertaBotModule();
-//}
-
+// This gets called when the bot starts!
 void UAlbertaBotModule::onStart()
 {
-	BWAPI::Broodwar->setLocalSpeed(5);
-	//BWAPI::Broodwar->setFrameSkip(0);
-
+    // Initialize SparCraft, the combat simulation package
     SparCraft::init();
+
+    // Initialize BOSS, the Build Order Search System
     BOSS::init();
 
-	BWAPI::Broodwar->enableFlag(BWAPI::Flag::UserInput);
+    // Parse the bot's configuration file if it has one, change this file path to where your config file is
+    // Any relative path name will be relative to Starcraft installation folder
+    ParseUtils::ParseConfigFile(Config::ConfigFile::ConfigFileLocation);
 
-    Options::BotModes::SetBotMode(Options::BotModes::AIIDE_TOURNAMENT);
-	Options::Modules::checkOptions();
-	
-    if (Options::Modules::USING_GAMECOMMANDER)
+    // Set our BWAPI options here    
+	BWAPI::Broodwar->setLocalSpeed(Config::BWAPIOptions::SetLocalSpeed);
+	BWAPI::Broodwar->setFrameSkip(Config::BWAPIOptions::SetFrameSkip);
+    
+    if (Config::BWAPIOptions::EnableCompleteMapInformation)
+    {
+        BWAPI::Broodwar->enableFlag(BWAPI::Flag::CompleteMapInformation);
+    }
+
+    if (Config::BWAPIOptions::EnableUserInput)
+    {
+        BWAPI::Broodwar->enableFlag(BWAPI::Flag::UserInput);
+    }
+
+    if (Config::BotInfo::PrintInfoOnStart)
+    {
+        BWAPI::Broodwar->printf("Hello! I am %s, written by %s", Config::BotInfo::BotName.c_str(), Config::BotInfo::Authors.c_str());
+    }
+
+    // Call BWTA to read and analyze the current map
+    if (Config::Modules::UsingGameCommander)
 	{
 		BWTA::readMap();
 		BWTA::analyze();
-	}
-	
-	if (Options::Modules::USING_MICRO_SEARCH)
-	{
-	    BWAPI::Broodwar->enableFlag(BWAPI::Flag::CompleteMapInformation);
-		SparCraft::init();
-		
-		sparcraftManager.onStart();
+
+        if (Config::Modules::UsingStrategyIO)
+        {
+            StrategyManager::Instance().readResults();
+            StrategyManager::Instance().setLearnedStrategy();
+        }
 	}
 }
 
 void UAlbertaBotModule::onEnd(bool isWinner) 
 {
-	if (Options::Modules::USING_GAMECOMMANDER)
+	if (Config::Modules::UsingGameCommander)
 	{
 		StrategyManager::Instance().onEnd(isWinner);
-        
-		ProductionManager::Instance().onGameEnd();
 	}	
 }
 
 void UAlbertaBotModule::onFrame()
 {
-	if (Options::Modules::USING_UNIT_COMMAND_MGR)
-	{
-		UnitCommandManager::Instance().update();
-	}
+    char red = '\x08';
+    char green = '\x07';
+    char white = '\x04';
 
-	if (Options::Modules::USING_GAMECOMMANDER) 
+    if (!Config::ConfigFile::ConfigFileFound)
+    {
+        BWAPI::Broodwar->drawBoxScreen(0,0,450,100, BWAPI::Colors::Black, true);
+        BWAPI::Broodwar->setTextSize(BWAPI::Text::Size::Huge);
+        BWAPI::Broodwar->drawTextScreen(10, 5, "%c%s Config File Not Found", red, Config::BotInfo::BotName.c_str());
+        BWAPI::Broodwar->setTextSize(BWAPI::Text::Size::Default);
+        BWAPI::Broodwar->drawTextScreen(10, 30, "%c%s will not run without its configuration file", white, Config::BotInfo::BotName.c_str());
+        BWAPI::Broodwar->drawTextScreen(10, 45, "%cCheck that the file below exists. Incomplete paths are relative to Starcraft directory", white);
+        BWAPI::Broodwar->drawTextScreen(10, 60, "%cYou can change this file location in Config::ConfigFile::ConfigFileLocation", white);
+        BWAPI::Broodwar->drawTextScreen(10, 75, "%cFile Not Found (or is empty): %c %s", white, green, Config::ConfigFile::ConfigFileLocation.c_str());
+        return;
+    }
+    else if (!Config::ConfigFile::ConfigFileParsed)
+    {
+        BWAPI::Broodwar->drawBoxScreen(0,0,450,100, BWAPI::Colors::Black, true);
+        BWAPI::Broodwar->setTextSize(BWAPI::Text::Size::Huge);
+        BWAPI::Broodwar->drawTextScreen(10, 5, "%c%s Config File Parse Error", red, Config::BotInfo::BotName.c_str());
+        BWAPI::Broodwar->setTextSize(BWAPI::Text::Size::Default);
+        BWAPI::Broodwar->drawTextScreen(10, 30, "%c%s will not run without a properly formatted configuration file", white, Config::BotInfo::BotName.c_str());
+        BWAPI::Broodwar->drawTextScreen(10, 45, "%cThe configuration file was found, but could not be parsed. Check that it is valid JSON", white);
+        BWAPI::Broodwar->drawTextScreen(10, 60, "%cFile Not Parsed: %c %s", white, green, Config::ConfigFile::ConfigFileLocation.c_str());
+        return;
+    }
+
+	if (Config::Modules::UsingGameCommander) 
 	{ 
-		gameCommander.update(); 
-	}
-	
-	if (Options::Modules::USING_ENHANCED_INTERFACE)
-	{
-		eui.update();
+		_gameCommander.update(); 
 	}
 
-	if (Options::Modules::USING_MICRO_SEARCH)
-	{
-		sparcraftManager.update();
-	}
-
-	if (Options::Modules::USING_REPLAY_VISUALIZER)
-	{
-		for (BWAPI::UnitInterface* unit : BWAPI::Broodwar->getAllUnits())
-		{
-			BWAPI::Broodwar->drawTextMap(unit->getPosition().x, unit->getPosition().y, "   %d", unit->getPlayer()->getID());
-
-			if (unit->isSelected())
-			{
-				BWAPI::Broodwar->drawCircleMap(unit->getPosition().x, unit->getPosition().y, 1000, BWAPI::Colors::Red);
-			}
-		}
-	}
+    if (Config::Modules::UsingAutoObserver)
+    {
+        _autoObserver.onFrame();
+    }
 }
 
-void UAlbertaBotModule::onUnitDestroy(BWAPI::UnitInterface* unit)
+void UAlbertaBotModule::onUnitDestroy(BWAPI::Unit unit)
 {
-	if (Options::Modules::USING_GAMECOMMANDER) { gameCommander.onUnitDestroy(unit); }
-	if (Options::Modules::USING_ENHANCED_INTERFACE) { eui.onUnitDestroy(unit); }
+	if (Config::Modules::UsingGameCommander) { _gameCommander.onUnitDestroy(unit); }
 }
 
-void UAlbertaBotModule::onUnitMorph(BWAPI::UnitInterface* unit)
+void UAlbertaBotModule::onUnitMorph(BWAPI::Unit unit)
 {
-	if (Options::Modules::USING_GAMECOMMANDER) { gameCommander.onUnitMorph(unit); }
+	if (Config::Modules::UsingGameCommander) { _gameCommander.onUnitMorph(unit); }
 }
 
 void UAlbertaBotModule::onSendText(std::string text) 
 { 
-	if (Options::Modules::USING_REPLAY_VISUALIZER && (text.compare("sim") == 0))
-	{
-		BWAPI::UnitInterface* selected = NULL;
-		for (BWAPI::UnitInterface* unit : BWAPI::Broodwar->getAllUnits())
-		{
-			if (unit->isSelected())
-			{
-				selected = unit;
-				break;
-			}
-		}
-
-		if (selected)
-		{
-			#ifdef USING_VISUALIZATION_LIBRARIES
-				//ReplayVisualizer rv;
-				//rv.launchSimulation(selected->getPosition(), 1000);
-			#endif
-		}
-	}
-
-	if (Options::Modules::USING_BUILD_ORDER_DEMO)
-	{
-		std::stringstream type;
-		std::stringstream numUnitType;
-		size_t numUnits = 0;
-
-		size_t i=0;
-		for (i=0; i<text.length(); ++i)
-		{
-			if (text[i] == ' ')
-			{
-				i++;
-				break;
-			}
-
-			type << text[i];
-		}
-
-		for (; i<text.length(); ++i)
-		{
-			numUnitType << text[i];
-		}
-
-		numUnits = atoi(numUnitType.str().c_str());
-
-        BWAPI::UnitType t;
-        for (BWAPI::UnitType & tt : BWAPI::UnitTypes::allUnitTypes())
-        {
-            if (tt.getName().compare(type.str()) == 0)
-            {
-                t = tt;
-                break;
-            }
-        }
-	
-		BWAPI::Broodwar->printf("Searching for %d of %s", numUnits, t.getName().c_str());
-
-        if (t != BWAPI::UnitType())
-        {
-            MetaPairVector goal;
-		    goal.push_back(MetaPair(BWAPI::UnitTypes::Protoss_Probe, 8));
-		    goal.push_back(MetaPair(BWAPI::UnitTypes::Protoss_Gateway, 2));
-		    goal.push_back(MetaPair(t, numUnits));
-
-		    ProductionManager::Instance().setSearchGoal(goal);
-        }
-        else
-        {
-            BWAPI::Broodwar->printf("Unknown unit type %s", type.str().c_str());
-        }
-
-		
-	}
+	ParseUtils::ParseTextCommand(text);
 }
 
-void UAlbertaBotModule::onUnitCreate(BWAPI::UnitInterface* unit)
+void UAlbertaBotModule::onUnitCreate(BWAPI::Unit unit)
 { 
-	if (Options::Modules::USING_GAMECOMMANDER) { gameCommander.onUnitCreate(unit); }
+	if (Config::Modules::UsingGameCommander) { _gameCommander.onUnitCreate(unit); }
 }
 
-void UAlbertaBotModule::onUnitShow(BWAPI::UnitInterface* unit)
-{ 
-	if (Options::Modules::USING_GAMECOMMANDER) { gameCommander.onUnitShow(unit); }
+void UAlbertaBotModule::onUnitComplete(BWAPI::Unit unit)
+{
+	if (Config::Modules::UsingGameCommander) { _gameCommander.onUnitComplete(unit); }
 }
 
-void UAlbertaBotModule::onUnitHide(BWAPI::UnitInterface* unit)
+void UAlbertaBotModule::onUnitShow(BWAPI::Unit unit)
 { 
-	if (Options::Modules::USING_GAMECOMMANDER) { gameCommander.onUnitHide(unit); }
+	if (Config::Modules::UsingGameCommander) { _gameCommander.onUnitShow(unit); }
 }
 
-void UAlbertaBotModule::onUnitRenegade(BWAPI::UnitInterface* unit)
+void UAlbertaBotModule::onUnitHide(BWAPI::Unit unit)
 { 
-	if (Options::Modules::USING_GAMECOMMANDER) { gameCommander.onUnitRenegade(unit); }
+	if (Config::Modules::UsingGameCommander) { _gameCommander.onUnitHide(unit); }
+}
+
+void UAlbertaBotModule::onUnitRenegade(BWAPI::Unit unit)
+{ 
+	if (Config::Modules::UsingGameCommander) { _gameCommander.onUnitRenegade(unit); }
 }

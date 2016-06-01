@@ -7,33 +7,32 @@
 #include "Logger.h"
 #include "MapTools.h"
 #include "HardCodedInfo.h"
-#include "EnhancedInterface.hpp"
-#include "UnitCommandManager.h"
-#include "SparCraftManager.h"
+#include "Config.h"
+#include "AutoObserver.h"
 
-#include "Options.h"
+#include "rapidjson\document.h"
 
 namespace UAlbertaBot
 {
 
 class UAlbertaBotModule : public BWAPI::AIModule
 {
-	GameCommander			gameCommander;
-	EnhancedInterface		eui;
-    SparCraftManager        sparcraftManager;
+	GameCommander   _gameCommander;
+    AutoObserver    _autoObserver;
 
 public:
 
 	void	onStart();
 	void	onFrame();
 	void	onEnd(bool isWinner);
-	void	onUnitDestroy(BWAPI::UnitInterface* unit);
-	void	onUnitMorph(BWAPI::UnitInterface* unit);
+	void	onUnitDestroy(BWAPI::Unit unit);
+	void	onUnitMorph(BWAPI::Unit unit);
 	void	onSendText(std::string text);
-	void	onUnitCreate(BWAPI::UnitInterface* unit);
-	void	onUnitShow(BWAPI::UnitInterface* unit);
-	void	onUnitHide(BWAPI::UnitInterface* unit);
-	void	onUnitRenegade(BWAPI::UnitInterface* unit);
+	void	onUnitCreate(BWAPI::Unit unit);
+	void	onUnitComplete(BWAPI::Unit unit);
+	void	onUnitShow(BWAPI::Unit unit);
+	void	onUnitHide(BWAPI::Unit unit);
+	void	onUnitRenegade(BWAPI::Unit unit);
 };
 
 }

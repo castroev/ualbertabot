@@ -15,7 +15,7 @@ GameState::GameState(const RaceID r)
 }
 
 #ifdef _MSC_VER
-GameState::GameState(BWAPI::GameWrapper & game, BWAPI::PlayerInterface * self)
+GameState::GameState(BWAPI::GameWrapper & game, BWAPI::PlayerInterface * self, const std::vector<BWAPI::UnitType> & buildingsQueued)
     : _race                 (Races::GetRaceID(self->getRace()))
     , _currentFrame         (game->getFrameCount())
     , _lastActionFrame      (0)
@@ -33,48 +33,112 @@ GameState::GameState(BWAPI::GameWrapper & game, BWAPI::PlayerInterface * self)
     _units.setGasWorkers(gasWorkerCount);
     _units.setBuildingWorkers(buildingWorkerCount);
 
+    // add buildings queued like they had just been started
+    for (const BWAPI::UnitType & type : buildingsQueued)
+    {
+        _units.addActionInProgress(ActionType(type), game->getFrameCount() + type.buildTime(), false);
+    }
+
 	// add each unit we have to the current state
 	for (BWAPI::UnitInterface * unit : self->getUnits())
 	{
+        // if the unit is an egg then we're building a zerg unit, add it with the finish time
+        if (unit->getType() == BWAPI::UnitTypes::Zerg_Egg)
+        {
+            _units.addActionInProgress(ActionType(unit->getBuildType()), game->getFrameCount() + unit->getRemainingBuildTime(), false);
+            continue;
+        }
+
 		if (unit->getType() == BWAPI::UnitTypes::Zerg_Larva)
 		{
 			++larvaCount;
 			continue;
 		}
 
+        // don't add any units that we don't have any the action space, this should never happen though
 		if (!ActionTypes::TypeExists(unit->getType()))
 		{
 			continue;
 		}
-        
-        const ActionType actionType(unit->getType());
+
+        ActionType actionType(unit->getType());
 
 		// if the unit is completed
 		if (unit->isCompleted())
 		{
-			// if it is a building
-			if (unit->getType().isBuilding() && !unit->getType().isAddon())
+			// if it is a building that is not an addon
+			if (unit->getType().isBuilding())
 			{
                 // add the building data accordingly
 				FrameCountType  trainTime = unit->getRemainingTrainTime() + unit->getRemainingResearchTime() + unit->getRemainingUpgradeTime();
                 ActionType      constructing;
                 ActionType      addon;
+                bool            isHatchery = unit->getType().isResourceDepot() && unit->getType().getRace() == BWAPI::Races::Zerg;
 
-                if (unit->getRemainingTrainTime() > 0)
+                // if this is a hatchery subtract the training time which is just larva production time
+                if (isHatchery)
                 {
-                    constructing = ActionType(*unit->getTrainingQueue().begin());
+                    trainTime -= unit->getRemainingTrainTime();
                 }
+                // if this unit is currently building an addon, set it
+                if (unit->getAddon() && unit->getAddon()->isBeingConstructed())
+                {
+                    constructing = ActionType(unit->getAddon()->getType());
+                } 
+                // if it's a non-hatchery currently training something, add it
+                else if (!isHatchery && unit->getRemainingTrainTime() > 0)
+                {
+                    // find the unit we have that has the same construction time remaining
+                    // this is an awful hack but there seems to be no alternative
+                    bool set = false;
+                    for (auto & u : self->getUnits())
+                    {
+                        if (u->getRemainingBuildTime() > 0 && u->getPosition().getDistance(unit->getPosition()) < 16)
+                        {
+                            constructing = ActionType(u->getType());
+                            set = true;
+                            break;
+                        }
+                    }
+
+                    // check to see if the last order issued was a trianing order and grab the unit type from that
+                    if (!set && unit->getLastCommand().getType() == BWAPI::UnitCommandTypes::Train)
+                    {
+                        BWAPI::UnitType trainType = unit->getLastCommand().getUnitType();
+
+                        if (BWAPI::Broodwar->getFrameCount() - unit->getLastCommandFrame() < 2*BWAPI::Broodwar->getLatencyFrames())
+                        {
+                            constructing = ActionType(trainType);
+                            set = true;
+
+                            // we now need to add this to units in progress, since it won't be detected below as an actual unit in progress
+                            _units.addActionInProgress(trainType, game->getFrameCount() + trainType.buildTime(), false);
+                        }
+                    }
+
+                    if (!set)
+                    {
+                        // if we couldn't find the unit type that this unit is training 
+                        // then we have to treat it as if it doesn't exist otherwise BOSS will act strangely
+                        trainTime = 0;
+                        BWAPI::Broodwar->printf("Couldn't find training unit for %s %s %d %d", unit->getType().getName().c_str(), unit->getBuildType().getName().c_str(), unit->getTrainingQueue().size(), unit->getRemainingTrainTime());
+                    }
+                }
+                // if it's researching something, add it
 				else if (unit->getRemainingResearchTime() > 0)
 				{
 					constructing = ActionType(unit->getTech());
+					_units.addActionInProgress(constructing, game->getFrameCount() + unit->getRemainingResearchTime(), false);
 				}
+                // if it's upgrading something, add it
 				else if (unit->getRemainingUpgradeTime() > 0)
 				{
-					constructing = ActionType(unit->getTech());
+					constructing = ActionType(unit->getUpgrade());
+					_units.addActionInProgress(constructing, game->getFrameCount() + unit->getRemainingUpgradeTime(), false);
 				}
 
-                // TODO: special case for Zerg_Hatchery
-                if (unit->getAddon() != NULL)
+                // add addons
+                if (unit->getAddon() != nullptr)
                 {
                     if (unit->getAddon()->isConstructing())
                     {
@@ -86,24 +150,39 @@ GameState::GameState(BWAPI::GameWrapper & game, BWAPI::PlayerInterface * self)
                     }
                 }
 
-                _units.addCompletedBuilding(actionType, trainTime, constructing, addon);
+                _units.addCompletedBuilding(actionType, trainTime, constructing, addon, unit->getLarva().size());
 			}
+            // otherwise it is a non-building unit
             else
             {
-                // add the unit to the state
-			    _units.addCompletedAction(actionType);
+                if (unit->getType() == BWAPI::UnitTypes::Terran_Siege_Tank_Siege_Mode)
+                {
+                    actionType = ActionType(BWAPI::UnitTypes::Terran_Siege_Tank_Tank_Mode);
+                }
 
+                // add the unit to the state
+			    _units.addCompletedAction(actionType, false);
+
+                // set the supply accordingly
                 _units.setCurrentSupply(_units.getCurrentSupply() + actionType.supplyRequired());
             }
 		}
-		else if (unit->isBeingConstructed() && !unit->getType().isAddon())
+        // the unit is currently under construction
+		else if ((unit->getRemainingBuildTime() > 0) && !unit->getType().isAddon())
 		{
-			_units.addActionInProgress(ActionType(unit->getType()), game->getFrameCount() + unit->getRemainingBuildTime(), false);
+            // special case of a zerg building morphing into its upgrade
+            if (actionType.isBuilding() && actionType.isMorphed())
+            {
+                // add the completed building which is morphing into this building
+                _units.addCompletedBuilding(actionType.whatBuildsActionType(), unit->getRemainingBuildTime(), actionType, ActionType(), unit->getLarva().size());
+            }
+
+            // add the unit itself in progress
+			_units.addActionInProgress(actionType, game->getFrameCount() + unit->getRemainingBuildTime(), false);
 		}
 	}
 
-    // TODO: set correct number of larva from state
-    for (BWAPI::UpgradeType & type : BWAPI::UpgradeTypes::allUpgradeTypes())
+    for (const BWAPI::UpgradeType & type : BWAPI::UpgradeTypes::allUpgradeTypes())
 	{
         if (!ActionTypes::TypeExists(type))
 		{
@@ -116,7 +195,7 @@ GameState::GameState(BWAPI::GameWrapper & game, BWAPI::PlayerInterface * self)
 		}
 	}
     
-    for (BWAPI::TechType & type : BWAPI::TechTypes::allTechTypes())
+    for (const BWAPI::TechType & type : BWAPI::TechTypes::allTechTypes())
 	{
         if (!ActionTypes::TypeExists(type))
 		{
@@ -171,6 +250,7 @@ void GameState::getAllLegalActions(ActionSet & actions) const
 
 bool GameState::isLegal(const ActionType & action) const
 {
+    const size_t mineralWorkers  = getNumMineralWorkers();
     const size_t numRefineries  = _units.getNumTotal(ActionTypes::GetRefinery(getRace()));
     const size_t numDepots      = _units.getNumTotal(ActionTypes::GetResourceDepot(getRace()));
     const size_t refineriesInProgress = _units.getNumInProgress(ActionTypes::GetRefinery(getRace()));
@@ -187,29 +267,33 @@ bool GameState::isLegal(const ActionType & action) const
     {
         return false;
     }
-
+	
     // if it's a unit and we are out of supply and aren't making an overlord, it's not legal
-    if ((_units.getCurrentSupply() + action.supplyRequired()) > (_units.getMaxSupply() + _units.getSupplyInProgress()))
+	if (!action.isMorphed() && !action.isSupplyProvider() && ((_units.getCurrentSupply() + action.supplyRequired()) > (_units.getMaxSupply() + _units.getSupplyInProgress())))
     {
         return false;
     }
 
-    // specific rule for never leaving 0 workers on minerals
-    if (action.isRefinery() && (getNumMineralWorkers() < 4))
+    // TODO: require an extra for refineries byt not buildings
+    // rules for buildings which are built by workers
+    if (action.isBuilding() && !action.isMorphed() && !action.isAddon())
     {
-        return false;
-    }
+        // be very strict about when we can make refineries to ensure we have enough workers to go in gas
+        if (action.isRefinery() && (getNumMineralWorkers() <= (4 + 3*refineriesInProgress)))
+        {
+            return false;
+        }
 
-    // if it's a new building and no drones are available, it's not legal
-    if (action.isBuilding() && (getNumMineralWorkers() <= 1) && (getNumBuildingWorkers() == 0))
-    {
-        return false;
-    }
+        int workersPerRefinery = 3;
+        int workersRequiredToBuild = getRace() == Races::Protoss ? 0 : 1;
+        int buildingIsRefinery = action.isRefinery() ? 1 : 0;
+        int candidateWorkers = getNumMineralWorkers() + _units.getNumInProgress(ActionTypes::GetWorker(getRace())) + getNumBuildingWorkers();
+        int workersToBeUsed = workersRequiredToBuild + workersPerRefinery*(refineriesInProgress);
 
-    // we can't build a building with our last worker
-    if (action.isBuilding() && (getNumMineralWorkers() <= 1 + 3*refineriesInProgress) && (getNumBuildingWorkers() == 0))
-    {
-        return false;
+        if (candidateWorkers < workersToBeUsed)
+        {
+            return false;
+        }
     }
 
     // if we have no gas income we can't make a gas unit
@@ -231,12 +315,19 @@ bool GameState::isLegal(const ActionType & action) const
     }
 
     // we don't need to go over the maximum supply limit with supply providers
-    if (action.isSupplyProvider() && (_units.getMaxSupply() + _units.getSupplyInProgress() >= 400))
+    if (action.isSupplyProvider() && (_units.getMaxSupply() + _units.getSupplyInProgress() > 400))
     {
         return false;
     }
 
+    // can only build one of a tech type
     if (action.isTech() && getUnitData().getNumTotal(action) > 0)
+    {
+        return false;
+    }
+
+    // check to see if an addon can ever be built
+    if (action.isAddon() && !_units.getBuildingData().canBuildEventually(action) && (_units.getNumInProgress(action.whatBuildsActionType()) == 0))
     {
         return false;
     }
@@ -245,7 +336,7 @@ bool GameState::isLegal(const ActionType & action) const
 }
 
 // do an action, action must be legal for this not to break
-void GameState::doAction(const ActionType & action)
+std::vector<ActionType> GameState::doAction(const ActionType & action)
 {
     BOSS_ASSERT(action.getRace() == _race, "Race of action does not match race of the state");
 
@@ -258,11 +349,14 @@ void GameState::doAction(const ActionType & action)
     _actionPerformed = action;
     _actionPerformedK = 1;
 
+    FrameCountType workerReadyTime = whenWorkerReady(action);
     FrameCountType ffTime = whenCanPerform(action);
 
-    BOSS_ASSERT(ffTime >= 0 && ffTime < 100000, "FFTime is very strange: %d", ffTime);
+    const std::string & name = action.getName();
 
-    fastForward(ffTime);
+    BOSS_ASSERT(ffTime >= 0 && ffTime < 1000000, "FFTime is very strange: %d", ffTime);
+
+    auto actionsFinished = fastForward(ffTime);
 
     _actionsPerformed[_actionsPerformed.size()-1].actionQueuedFrame = _currentFrame;
     _actionsPerformed[_actionsPerformed.size()-1].gasWhenQueued = _gas;
@@ -272,8 +366,8 @@ void GameState::doAction(const ActionType & action)
     FrameCountType elapsed(_currentFrame - _lastActionFrame);
     _lastActionFrame = _currentFrame;
 
-    BOSS_ASSERT(canAffordMinerals(action),   "Minerals less than price: %lf < %d, ffTime=%d %s", _minerals, action.mineralPrice(), (int)elapsed, action.getName().c_str());
-    BOSS_ASSERT(canAffordGas(action),       "Gas less than price: %lf < %d, ffTime=%d %s", _gas, (int)action.gasPrice(), (int)elapsed, action.getName().c_str());
+    BOSS_ASSERT(canAffordMinerals(action),   "Minerals less than price: %ld < %d, ffTime=%d %s", _minerals, action.mineralPrice(), (int)elapsed, action.getName().c_str());
+    BOSS_ASSERT(canAffordGas(action),       "Gas less than price: %ld < %d, ffTime=%d %s", _gas, action.gasPrice(), (int)elapsed, action.getName().c_str());
 
     // modify our resources
     _minerals   -= action.mineralPrice();
@@ -286,8 +380,9 @@ void GameState::doAction(const ActionType & action)
     }
     else if (getRace() == Races::Terran)
     {
-        if (action.isBuilding())
+        if (action.isBuilding() && !action.isAddon())
         {
+            BOSS_ASSERT(getNumMineralWorkers() > 0, "Don't have any mineral workers to assign");
             _units.setBuildingWorker();
         }
 
@@ -319,10 +414,12 @@ void GameState::doAction(const ActionType & action)
             _units.addActionInProgress(action, _currentFrame + action.buildTime());
         }
      }
+
+	return actionsFinished;
 }
 
 // fast forwards the current state to time toFrame
-void GameState::fastForward(const FrameCountType toFrame)
+std::vector<ActionType> GameState::fastForward(const FrameCountType toFrame)
 {
     // fast forward the building timers to the current frame
     FrameCountType previousFrame = _currentFrame;
@@ -334,6 +431,8 @@ void GameState::fastForward(const FrameCountType toFrame)
     ResourceCountType   moreGas             = 0;
     ResourceCountType   moreMinerals        = 0;
 
+
+	std::vector<ActionType> actionsFinished;
     // while we still have units in progress
     while ((_units.getNumActionsInProgress() > 0) && (_units.getNextActionFinishTime() <= toFrame))
     {
@@ -349,7 +448,7 @@ void GameState::fastForward(const FrameCountType toFrame)
         lastActionFinished 	= _units.getNextActionFinishTime();
 
         // finish the action, which updates mineral and gas rates if required
-        _units.finishNextActionInProgress();
+		actionsFinished.push_back(_units.finishNextActionInProgress());
     }
 
     // update resources from the last action finished to toFrame
@@ -368,17 +467,22 @@ void GameState::fastForward(const FrameCountType toFrame)
     {
         _units.getHatcheryData().fastForward(previousFrame, toFrame);
     }
+
+	return actionsFinished;
 }
 
 // returns the time at which all resources to perform an action will be available
 const FrameCountType GameState::whenCanPerform(const ActionType & action) const
 {
+    const std::string & name = action.getName();
+
     // the resource times we care about
     FrameCountType mineralTime  (_currentFrame); 	// minerals
     FrameCountType gasTime      (_currentFrame); 	// gas
     FrameCountType classTime    (_currentFrame); 	// class-specific
     FrameCountType supplyTime   (_currentFrame); 	// supply
     FrameCountType prereqTime   (_currentFrame); 	// prerequisites
+    FrameCountType workerTime   (_currentFrame);
     FrameCountType maxVal       (_currentFrame);
 
     // figure out when prerequisites will be ready
@@ -396,12 +500,16 @@ const FrameCountType GameState::whenCanPerform(const ActionType & action) const
     // set when we will have enough supply for this unit
     supplyTime      = whenSupplyReady(action);
 
+    // when will we have a worker ready to build it?
+    workerTime      = whenWorkerReady(action);
+
     // figure out the max of all these times
     maxVal = (mineralTime > maxVal) ? mineralTime   : maxVal;
     maxVal = (gasTime >     maxVal) ? gasTime       : maxVal;
     maxVal = (classTime >   maxVal) ? classTime     : maxVal;
     maxVal = (supplyTime >  maxVal) ? supplyTime    : maxVal;
     maxVal = (prereqTime >  maxVal) ? prereqTime    : maxVal;
+    maxVal = (workerTime >  maxVal) ? workerTime    : maxVal;
 
     // return the time
     return maxVal;
@@ -409,17 +517,16 @@ const FrameCountType GameState::whenCanPerform(const ActionType & action) const
 
 const FrameCountType GameState::raceSpecificWhenReady(const ActionType & a) const
 {
-    // PROTOSS: Nothing
-    // TERRAN:	If we have 1 or less mineral workers and a worker is building, when will it be free?
-    if (getRace() == Races::Terran)
-    {
-        if (getNumMineralWorkers() <= 1 && getNumBuildingWorkers() > 0)
+    const static ActionType larva = ActionTypes::GetActionType("Zerg_Larva");
+
+
+    if (getRace() == Races::Zerg)
+    {        
+        if (a.whatBuildsActionType() != larva)
         {
-            return _units.getNextBuildingFinishTime();
+            return 0;
         }
-    }
-    else if (getRace() == Races::Zerg)
-    {
+
         if (getHatcheryData().numLarva() == 0)
         {
             return getHatcheryData().nextLarvaFrameAfter(_currentFrame);
@@ -427,6 +534,52 @@ const FrameCountType GameState::raceSpecificWhenReady(const ActionType & a) cons
     }
 
     return 0;
+}
+
+const FrameCountType GameState::whenWorkerReady(const ActionType & action) const
+{
+    if (!action.whatBuildsActionType().isWorker())
+    {
+        return _currentFrame;
+    }
+
+    int refineriesInProgress = _units.getNumInProgress(ActionTypes::GetRefinery(getRace()));
+
+    // protoss doesn't tie up a worker to build, so they can build whenever a mineral worker is free
+    if (getRace() == Races::Protoss && getNumMineralWorkers() > 0)
+    {
+        return _currentFrame;
+    }
+
+    // if we have a mineral worker, then it is ready right now
+    if (getNumMineralWorkers() > 3*refineriesInProgress)
+    {
+        return _currentFrame;
+    }
+    
+    // at this point we need to wait for the next worker to become free since existing workers
+    // are either all used, or they are reserved to be put into refineries
+    // so we must have either a worker in progress, or a building in progress
+    const ActionType & Worker = ActionTypes::GetWorker(getRace());
+    BOSS_ASSERT(_units.getNumInProgress(Worker) > 0 || getNumBuildingWorkers() > 0, "No worker will ever be free");
+
+    FrameCountType workerReadyTime = _currentFrame;
+
+    // if we have a worker in progress, when will it be ready?
+    FrameCountType whenWorkerInProgressFinished = std::numeric_limits<FrameCountType>::max();
+    if (_units.getNumInProgress(Worker))
+    {
+        whenWorkerInProgressFinished = _units.getFinishTime(Worker);
+    }
+
+    // if we have a worker currently building, when will it be free?
+    FrameCountType whenBuildingWorkerFree = std::numeric_limits<FrameCountType>::max();
+    if (getNumBuildingWorkers() > 0)
+    {
+        whenBuildingWorkerFree = _units.getNextBuildingFinishTime();
+    }
+
+    return std::min(whenWorkerInProgressFinished, whenBuildingWorkerFree);
 }
 
 const FrameCountType GameState::whenSupplyReady(const ActionType & action) const
@@ -464,6 +617,11 @@ const FrameCountType GameState::whenSupplyReady(const ActionType & action) const
 
 const FrameCountType GameState::whenPrerequisitesReady(const ActionType & action) const
 {
+    if (action == ActionTypes::GetActionType("Protoss_Dark_Templar"))
+    {
+        int a = 6;
+    }
+
     FrameCountType preReqReadyTime = _currentFrame;
 
     // if a building builds this action
@@ -495,16 +653,16 @@ const FrameCountType GameState::whenBuildingPrereqReady(const ActionType & actio
 
     BOSS_ASSERT(builder.isBuilding(), "The thing that builds this is not a building");
 
-    bool buildingIsConstructed                  = _units.getNumCompleted(builder) > 0;
+    bool buildingIsConstructed                  = _units.getBuildingData().canBuildEventually(action);//getNumCompleted(builder) > 0;
     bool buildingInProgress                     = _units.getNumInProgress(builder) > 0;
     FrameCountType constructedBuildingFreeTime  = std::numeric_limits<int>::max()-10;
     FrameCountType buildingInProgressFinishTime = std::numeric_limits<int>::max()-10;
 
     BOSS_ASSERT(buildingIsConstructed || (!action.requiresAddon() && buildingInProgress), "We will never be able to build action: %s", action.getName().c_str());
-
+    
     if (buildingIsConstructed)
     {
-        constructedBuildingFreeTime  = _currentFrame + _units.getWhenBuildingCanBuild(action);
+        constructedBuildingFreeTime  = _currentFrame + _units.getBuildingData().getTimeUntilCanBuild(action);
     }
         
     if (!action.requiresAddon() && buildingInProgress)
@@ -515,38 +673,38 @@ const FrameCountType GameState::whenBuildingPrereqReady(const ActionType & actio
     // this will give us when the building will be free to build this action
     buildingAvailableTime = std::min(constructedBuildingFreeTime, buildingInProgressFinishTime);
 
-    //// get all prerequisites currently in progress but do not have any completed
-    //PrerequisiteSet prereqInProgress = _units.getPrerequistesInProgress(action);
+    // get all prerequisites currently in progress but do not have any completed
+    PrerequisiteSet prereqInProgress = _units.getPrerequistesInProgress(action);
 
-    //// remove the specific builder from this list since we calculated that earlier
-    //prereqInProgress.remove(builder);
+    // remove the specific builder from this list since we calculated that earlier
+    prereqInProgress.remove(builder);
 
     //// if we actually have some prerequisites in progress other than the building
-    //if (!prereqInProgress.isEmpty())
-    //{
-    //    // get the max time the earliest of each type will be finished in
-    //    FrameCountType C = _units.getFinishTime(prereqInProgress);
+    if (!prereqInProgress.isEmpty())
+    {
+        // get the max time the earliest of each type will be finished in
+        FrameCountType C = _units.getFinishTime(prereqInProgress);
 
-    //    // take the maximum of this value and when the building was available
-    //    buildingAvailableTime = (C > buildingAvailableTime) ? C : buildingAvailableTime;
-    //}
+        // take the maximum of this value and when the building was available
+        buildingAvailableTime = (C > buildingAvailableTime) ? C : buildingAvailableTime;
+    }
     
     return buildingAvailableTime;
 }
 
-const FrameCountType GameState::whenConstructedBuildingReady(const ActionType & builder) const
-{
-    // if what builds a is a building and we have at least one of them completed so far
-    if (builder.isBuilding() && _units.getNumTotal(builder) > 0)
-    {
-        FrameCountType returnTime = _currentFrame + _units.getTimeUntilBuildingFree(builder);
-
-        // get when the next building is available
-        return returnTime;
-    }
-
-    return getCurrentFrame();
-}
+//const FrameCountType GameState::whenConstructedBuildingReady(const ActionType & builder) const
+//{
+//    // if what builds a is a building and we have at least one of them completed so far
+//    if (builder.isBuilding() && _units.getNumTotal(builder) > 0)
+//    {
+//        FrameCountType returnTime = _currentFrame + _units.getTimeUntilBuildingFree(builder);
+//
+//        // get when the next building is available
+//        return returnTime;
+//    }
+//
+//    return getCurrentFrame();
+//}
 
 // when will minerals be ready
 const FrameCountType GameState::whenMineralsReady(const ActionType & action) const
@@ -590,15 +748,24 @@ const FrameCountType GameState::whenMineralsReady(const ActionType & action) con
 
         // if it was a drone or extractor update the temp variables
         const ActionType & actionPerformed = _units.getActionInProgressByIndex(progressIndex);
+
+        // finishing a building as terran gives you a mineral worker back
+        if (actionPerformed.isBuilding() && !actionPerformed.isAddon() && (getRace() == Races::Terran))
+        {
+            currentMineralWorkers++;
+        }
+
         if (actionPerformed.isWorker())
         {
             currentMineralWorkers++;
         }
         else if (actionPerformed.isRefinery())
         {
-            BOSS_ASSERT(currentMineralWorkers >= 3, "Not enough mineral workers");
-            currentMineralWorkers -= 3; currentGasWorkers += 3;
+            BOSS_ASSERT(currentMineralWorkers > 3, "Not enough mineral workers \n");
+            currentMineralWorkers -= 3; 
+            currentGasWorkers += 3;
         }
+
 
         // update the last action
         lastActionFinishFrame = _units.getFinishTimeByIndex(progressIndex);
@@ -607,7 +774,17 @@ const FrameCountType GameState::whenMineralsReady(const ActionType & action) con
     // if we still haven't added enough minerals, add more time
     if (addedMinerals < difference)
     {
-        FrameCountType finalTimeToAdd = (difference - addedMinerals) / (currentMineralWorkers * Constants::MPWPF);
+        BOSS_ASSERT(currentMineralWorkers > 0, "Shouldn't have 0 mineral workers");
+
+       FrameCountType finalTimeToAdd;
+	   if (currentMineralWorkers != 0)
+		{
+			finalTimeToAdd = (difference - addedMinerals) / (currentMineralWorkers * Constants::MPWPF);
+		}
+		else
+		{
+			finalTimeToAdd = 1000000;
+		}
         addedMinerals += finalTimeToAdd * currentMineralWorkers * Constants::MPWPF;
         addedTime     += finalTimeToAdd;
 
@@ -666,13 +843,20 @@ const FrameCountType GameState::whenGasReady(const ActionType & action) const
 
         // if it was a drone or extractor update the temp variables
         const ActionType & actionPerformed = _units.getActionInProgressByIndex(progressIndex);
+
+        // finishing a building as terran gives you a mineral worker back
+        if (actionPerformed.isBuilding() && !actionPerformed.isAddon() && (getRace() == Races::Terran))
+        {
+            currentMineralWorkers++;
+        }
+
         if (actionPerformed.isWorker())
         {
             currentMineralWorkers++;
         }
         else if (actionPerformed.isRefinery())
         {
-            BOSS_ASSERT(currentMineralWorkers >= 3, "Not enough mineral workers");
+            BOSS_ASSERT(currentMineralWorkers > 3, "Not enough mineral workers");
             currentMineralWorkers -= 3; currentGasWorkers += 3;
         }
 
@@ -683,7 +867,16 @@ const FrameCountType GameState::whenGasReady(const ActionType & action) const
     // if we still haven't added enough minerals, add more time
     if (addedGas < difference)
     {
-        FrameCountType finalTimeToAdd = (difference - addedGas) / (currentGasWorkers * Constants::GPWPF);
+		BOSS_ASSERT(currentGasWorkers > 0, "Shouldn't have 0 gas workers");
+		FrameCountType finalTimeToAdd;
+		if (currentGasWorkers != 0)
+		{
+			finalTimeToAdd = (difference - addedGas) / (currentGasWorkers * Constants::GPWPF);
+		}
+		else
+		{
+			finalTimeToAdd = 1000000;
+		}
         addedGas    += finalTimeToAdd * currentGasWorkers * Constants::GPWPF;
         addedTime   += finalTimeToAdd;
 
@@ -821,49 +1014,69 @@ void GameState::addCompletedAction(const ActionType & action, const size_t num)
     }
 }
 
+void GameState::removeCompletedAction(const ActionType & action, const size_t num)
+{
+	for (size_t i(0); i < num; ++i)
+	{
+		_units.setCurrentSupply(_units.getCurrentSupply() - action.supplyRequired());
+		_units.removeCompletedAction(action);
+	}
+}
+
 const std::string GameState::toString() const
 {
-    std::cout << "\n-----------------------------------------------------------\n";
+	std::stringstream ss;
+	ss << "\n-----------------------------------------------------------\n";
     
-    std::cout << "Current Frame: " << _currentFrame << "(" << (_currentFrame / 24) << "m " << ((_currentFrame / 24) % 60) << "s)\n\n";
+	ss << "Current Frame: " << _currentFrame << " (" << (_currentFrame / (60 * 24)) << "m " << ((_currentFrame / 24) % 60) << "s)\n\n";
 
-    std::cout << "Units Completed:\n\n";
+	ss << "Units Completed:\n";
     const std::vector<ActionType> & allActions = ActionTypes::GetAllActionTypes(getRace());
 	for (ActionID i(0); i<allActions.size(); ++i)
 	{
         const ActionType & action = allActions[i];
         if (_units.getNumCompleted(action) > 0) 
         {
-            std::cout << "\t" << (int)_units.getNumCompleted(action) << "\t" << action.getName() << "\n";
+			ss << "\t" << (int)_units.getNumCompleted(action) << "\t" << action.getName() << "\n";
         }
     }
 
-    std::cout << "\nUnits In Progress:\n\n";
+	ss << "\nUnits In Progress:\n";
     for (int i(0); i<_units.getNumActionsInProgress(); i++) 
     {
-        std::cout << "\t" << (int)_units.getFinishTimeByIndex(i) << "\t" << _units.getActionInProgressByIndex(i).getName() << "\n";
+		ss << "\t" << (int)_units.getFinishTimeByIndex(i) << "\t" << _units.getActionInProgressByIndex(i).getName() << "\n";
     }
 
-    std::cout << "\nLegal Actions:\n\n";
+    if (_race == Races::Zerg)
+    {
+        const HatcheryData & hd = _units.getHatcheryData();
+        ss << "\nHatcheries:\n";
+        ss << "\t" << hd.size() << " Hatcheries\n";
+        ss << "\t" << hd.numLarva() << " Larva\n";
+    }
+
+    
+    ss << "\nLegal Actions:\n";
     ActionSet legalActions;
     getAllLegalActions(legalActions);
     for (UnitCountType a(0); a<legalActions.size(); ++a)
     {
-        std::cout << "\t" << legalActions[a].getName() << "\n";
+        ss << "\t" << legalActions[a].getName() << "\n";
     }
 
-    std::cout << "\nResources:\n\n";
-    std::cout << "\t" << _minerals << "\tMinerals\n";
-    std::cout << "\t" << _gas << "\tGas\n";
-    std::cout << "\t" << _units.getNumMineralWorkers() << "\tMineral Workers\n";
-    std::cout << "\t" << _units.getNumGasWorkers() << "\tGas Workers\n";
-    std::cout << "\n\t" << _units.getCurrentSupply()/2 << " / " << _units.getMaxSupply()/2 << "\tSupply\n";
+	ss << "\nResources:\n";
+	ss << "\t" << _minerals / Constants::RESOURCE_SCALE << "\tMinerals\n";
+	ss << "\t" << _gas / Constants::RESOURCE_SCALE << "\tGas\n";
+	ss << "\t" << _units.getNumMineralWorkers() << "\tMineral Workers\n";
+    ss << "\t" << _units.getNumGasWorkers() << "\tGas Workers\n";
+    ss << "\t" << _units.getNumBuildingWorkers() << "\tBuilding Workers\n";
+    ss << "\n\t" << _units.getCurrentSupply()/2 << " / " << _units.getMaxSupply()/2 << "\tSupply\n";
 
 
-    std::cout << "-----------------------------------------------------------\n";
+    ss << "-----------------------------------------------------------\n";
     //printPath();
 
-    return "";
+    return ss.str();
 }
 
 const std::string GameState::getActionsPerformedString() const
@@ -876,4 +1089,110 @@ const std::string GameState::getActionsPerformedString() const
     }
 
     return ss.str();
+}
+
+std::string GameState::whyIsNotLegal(const ActionType & action) const
+{
+    std::stringstream ss;
+
+    const size_t mineralWorkers  = getNumMineralWorkers();
+    const size_t numRefineries  = _units.getNumTotal(ActionTypes::GetRefinery(getRace()));
+    const size_t numDepots      = _units.getNumTotal(ActionTypes::GetResourceDepot(getRace()));
+    const size_t refineriesInProgress = _units.getNumInProgress(ActionTypes::GetRefinery(getRace()));
+
+    // we can never build a larva
+    static const ActionType & Zerg_Larva = ActionTypes::GetActionType("Zerg_Larva");
+    if (action == Zerg_Larva)
+    {
+        ss << action.getName() << " - Reason: Cannot build a Larva" << std::endl;
+        return ss.str();
+    }
+
+    if (action.getRace() == Races::Protoss && action.isBuilding() && !action.isResourceDepot() && _units.getNumTotal(ActionTypes::GetSupplyProvider(Races::Protoss)) == 0)
+    {
+        ss << action.getName() << " - Reason: Protoss buildings require a Pylon" << std::endl;
+        return ss.str();
+    }
+
+    // check if the tech requirements are met
+    if (!_units.hasPrerequisites(action.getPrerequisites()))
+    {
+        ss << action.getName() << " - Reason: Tech prerequisites not met" << std::endl;
+        return ss.str();
+    }
+	
+    // if it's a unit and we are out of supply and aren't making an overlord, it's not legal
+	if (!action.isMorphed() && !action.isSupplyProvider() && ((_units.getCurrentSupply() + action.supplyRequired()) > (_units.getMaxSupply() + _units.getSupplyInProgress())))
+    {
+        ss << action.getName() << " - Reason: Not enough supply" << std::endl;
+        return ss.str();
+    }
+
+    // TODO: require an extra for refineries byt not buildings
+    // rules for buildings which are built by workers
+    if (action.isBuilding() && !action.isMorphed() && !action.isAddon())
+    {
+        // be very strict about when we can make refineries to ensure we have enough workers to go in gas
+        if (action.isRefinery() && (getNumMineralWorkers() <= (4 + 3*refineriesInProgress)))
+        {
+            ss << action.getName() << " - Reason: Not enough workers for refinery" << std::endl;
+            return ss.str();
+        }
+
+        int workersPerRefinery = 3;
+        int workersRequiredToBuild = getRace() == Races::Protoss ? 0 : 1;
+        int buildingIsRefinery = action.isRefinery() ? 1 : 0;
+        int candidateWorkers = getNumMineralWorkers() + _units.getNumInProgress(ActionTypes::GetWorker(getRace())) + getNumBuildingWorkers();
+        int workersToBeUsed = workersRequiredToBuild + workersPerRefinery*(refineriesInProgress);
+
+        if (candidateWorkers < workersToBeUsed)
+        {
+            ss << action.getName() << " - Reason: Not enough workers to build building" << std::endl;
+            return ss.str();
+        }
+    }
+
+    // if we have no gas income we can't make a gas unit
+    if (!canAffordGas(action) && !_units.hasGasIncome())
+    {
+        ss << action.getName() << " - Reason: No gas income" << std::endl;
+        return ss.str();
+    }
+
+    // if we have no mineral income we'll never have a minerla unit
+    if (!canAffordMinerals(action) && !_units.hasMineralIncome())
+    {
+        ss << action.getName() << " - Reason: No mineral income" << std::endl;
+        return ss.str();
+    }
+
+    // don't build more refineries than resource depots
+    if (action.isRefinery() && (numRefineries >= numDepots))
+    {
+        ss << action.getName() << " - Reason: Can't have more refineries than depots" << std::endl;
+        return ss.str();
+    }
+
+    // we don't need to go over the maximum supply limit with supply providers
+    if (action.isSupplyProvider() && (_units.getMaxSupply() + _units.getSupplyInProgress() > 420))
+    {
+        ss << action.getName() << " - Reason: Unnecessary supply providers" << std::endl;
+        return ss.str();
+    }
+
+    // can only build one of a tech type
+    if (action.isTech() && getUnitData().getNumTotal(action) > 0)
+    {
+        ss << action.getName() << " - Reason: Can't build more than one of a tech" << std::endl;
+        return ss.str();
+    }
+
+    // check to see if an addon can ever be built
+    if (action.isAddon() && !_units.getBuildingData().canBuildEventually(action) && (_units.getNumInProgress(action.whatBuildsActionType()) == 0))
+    {
+        ss << action.getName() << " - Reason: No building for addon" << std::endl;
+        return ss.str();
+    }
+
+    return "Legal";
 }

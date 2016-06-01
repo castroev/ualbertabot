@@ -14,15 +14,18 @@
 #include <list>
 #include <set>
 #include <map>
+#include <array>
 
 #include <BWAPI.h>
 #include <BWTA.h>
 #include "Logger.h"
 
-#include "Options.h"
+#include "Config.h"
 #include "UABAssert.h"
 
 BWAPI::AIModule * __NewAIModule();
+
+#define UALBERTABOT_PROJECT
 
 struct double2
 {
@@ -50,4 +53,10 @@ struct double2
 		angle = angle*M_PI/180.0;
 		*this = double2(x * cos(angle) - y * sin(angle), y * cos(angle) + x * sin(angle));
 	}
+};
+
+struct Rect
+{
+    int x, y;
+    int height, width;
 };

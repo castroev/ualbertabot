@@ -35,7 +35,7 @@ const FrameCountType UnitData::getWhenBuildingCanBuild(const ActionType & action
 }
 
 // only used for adding existing buildings from a BWAPI Game * object
-void UnitData::addCompletedBuilding(const ActionType & action, const FrameCountType timeUntilFree, const ActionType & constructing, const ActionType & addon)
+void UnitData::addCompletedBuilding(const ActionType & action, const FrameCountType timeUntilFree, const ActionType & constructing, const ActionType & addon, int numLarva)
 {
     _numUnits[action.ID()] += action.numProduced();
 
@@ -55,18 +55,32 @@ void UnitData::addCompletedBuilding(const ActionType & action, const FrameCountT
 	}
 
     // special case for hatcheries
-    if (action.isBuilding() && (action.getUnitType() == BWAPI::UnitTypes::Zerg_Hatchery))
+    if (action.getRace() == Races::Zerg && action.isResourceDepot())
     {
-        _hatcheryData.addHatchery(1);
+        _hatcheryData.addHatchery(numLarva);
     }
 }
 
 void UnitData::addCompletedAction(const ActionType & action, bool wasBuilt)
 {
-    _numUnits[action.ID()] += action.numProduced();
+    const static ActionType Lair = ActionTypes::GetActionType("Zerg_Lair");
+    const static ActionType Hive = ActionTypes::GetActionType("Zerg_Hive");
 
-    _maxSupply += action.supplyProvided();
+    _numUnits[action.ID()] += wasBuilt ? action.numProduced() : 1;
 
+    if (wasBuilt)
+    {
+        // a lair or hive from a hatchery don't produce additional supply
+        if (action != Lair && action != Hive)
+        {
+            _maxSupply += action.supplyProvided();
+        }
+    }
+    else
+    {
+        _maxSupply += action.supplyProvided();
+    }
+    
     if (action.isWorker()) 
 	{ 
 		_mineralWorkers++;
@@ -82,11 +96,7 @@ void UnitData::addCompletedAction(const ActionType & action, bool wasBuilt)
     // if it's a building that can produce units, add it to the building data
 	if (action.isBuilding() && !action.isSupplyProvider())
 	{
-        if (action.isMorphed() && wasBuilt)
-        {
-		    _buildings.morphBuilding(action.whatBuildsActionType(), action);   
-        }
-        else
+        if (!action.isMorphed())
         {
             _buildings.addBuilding(action, ActionTypes::None);
         }
@@ -99,6 +109,58 @@ void UnitData::addCompletedAction(const ActionType & action, bool wasBuilt)
     }
 }
 
+void UnitData::removeCompletedAction(const ActionType & action)
+{
+	//Logger::LogAppendToFile(BOSS_LOGFILE, "Unit removed " + action.getName());
+	const static ActionType Lair = ActionTypes::GetActionType("Zerg_Lair");
+	const static ActionType Hive = ActionTypes::GetActionType("Zerg_Hive");
+
+	_numUnits[action.ID()] -= action.numProduced();
+
+
+		// a lair or hive from a hatchery don't produce additional supply
+	if (action != Lair && action != Hive)
+	{
+		_maxSupply -= action.supplyProvided();
+	}
+
+
+	if (action.isWorker())
+	{
+		if (_mineralWorkers > 0)
+		{
+			_mineralWorkers--;
+		}
+		else if (_gasWorkers > 0)
+		{
+			_gasWorkers--;
+		}
+	}
+
+	// if it's an extractor
+	if (action.isRefinery())
+	{
+		// take those workers from minerals and put them into it
+		_mineralWorkers += 3; _gasWorkers -= 3;
+	}
+	BOSS_ASSERT(_mineralWorkers >= 0, "Can't have negative mineral workers");
+	BOSS_ASSERT(_gasWorkers >= 0, "Can't have negative gas workers");
+	// if it's a building that can produce units, add it to the building data
+	if (action.isBuilding() && !action.isSupplyProvider())
+	{
+		if (!action.isMorphed())
+		{
+			_buildings.removeBuilding(action, ActionTypes::None);
+		}
+	}
+
+	// special case for hatcheries
+	if (action.isBuilding() && (action.getUnitType() == BWAPI::UnitTypes::Zerg_Hatchery))
+	{
+		_hatcheryData.removeHatchery();
+	}
+}
+
 void UnitData::addActionInProgress(const ActionType & action, const FrameCountType & completionFrame, bool queueAction)
 {
     FrameCountType finishTime = (action.isBuilding() && !action.isMorphed()) ? completionFrame + Constants::BUILDING_PLACEMENT : completionFrame;
@@ -106,7 +168,10 @@ void UnitData::addActionInProgress(const ActionType & action, const FrameCountTy
 	// add it to the actions in progress
 	_progress.addAction(action, finishTime);
     
-    _currentSupply += action.supplyRequired() * action.numProduced();
+    if (!action.isMorphed())
+    {
+        _currentSupply += action.supplyRequired() * action.numProduced();
+    }
 
     if (queueAction && action.whatBuildsIsBuilding())
 	{
@@ -146,7 +211,7 @@ const bool UnitData::hasGasIncome() const
 
 const bool UnitData::hasMineralIncome() const
 {
-    return _mineralWorkers > 0 || getNumInProgress(ActionTypes::GetWorker(getRace())) > 0;
+    return getNumMineralWorkers() > 0 || getNumBuildingWorkers() > 0 || getNumInProgress(ActionTypes::GetWorker(getRace())) > 0;
 }
 
 void UnitData::releaseBuildingWorker()
@@ -175,7 +240,6 @@ void UnitData::morphUnit(const ActionType & from, const ActionType & to, const F
     BOSS_ASSERT(getNumCompleted(from) > 0, "Must have the unit type to morph it");
     _numUnits[from.ID()]--;
     _currentSupply -= from.supplyRequired();
-    _maxSupply -= from.supplyProvided();
 
     if (from.isWorker())
     {
@@ -201,10 +265,10 @@ const UnitCountType UnitData::getNumBuildingWorkers() const
     return _buildingWorkers;
 }
 
-void UnitData::finishNextActionInProgress() 
+ActionType UnitData::finishNextActionInProgress() 
 {	
 	// get the actionUnit from the progress data
-	const ActionType & action = _progress.nextAction();
+	ActionType action = _progress.nextAction();
 
 	// add the unit to the unit counter
 	addCompletedAction(action);
@@ -215,7 +279,7 @@ void UnitData::finishNextActionInProgress()
 	if (getRace() == Races::Terran)
 	{
 		// if it's a building, release the worker back
-		if (action.isBuilding())
+		if (action.isBuilding() && !action.isAddon())
 		{
 			releaseBuildingWorker();
 		}
@@ -225,6 +289,8 @@ void UnitData::finishNextActionInProgress()
         const static ActionType hatchery = ActionTypes::GetActionType("Zerg_Hatchery");
 
 	}
+
+	return action;
 }
 
 const FrameCountType UnitData::getNextActionFinishTime() const
@@ -249,9 +315,37 @@ const UnitCountType UnitData::getNumTotal(const ActionType & action) const
 
 const bool UnitData::hasPrerequisites(const PrerequisiteSet & required) const
 {
+    static const ActionType & Hatchery      = ActionTypes::GetActionType("Zerg_Hatchery");
+    static const ActionType & Lair          = ActionTypes::GetActionType("Zerg_Lair");
+    static const ActionType & Hive          = ActionTypes::GetActionType("Zerg_Hive");
+    static const ActionType & Spire         = ActionTypes::GetActionType("Zerg_Spire");
+    static const ActionType & GreaterSpire  = ActionTypes::GetActionType("Zerg_Greater_Spire");
+
     for (size_t a(0); a<required.size(); ++a)
     {
-        if (getNumTotal(required.getActionType(a)) < required.getActionTypeCount(a))
+        const ActionType & type = required.getActionType(a);
+        const size_t & req = required.getActionTypeCount(a);
+        size_t have = getNumTotal(type);
+
+        // special check for zerg moprhed buildings
+        if (_race == Races::Zerg)
+        {
+            if (type == Hatchery)
+            {
+                have += getNumTotal(Lair);
+                have += getNumTotal(Hive);
+            }
+            else if (type == Lair)
+            {
+                have += getNumTotal(Hive);
+            }
+            else if (type == Spire)
+            {
+                have += getNumTotal(GreaterSpire);
+            }
+        }
+
+        if (have < req)
         {
             return false;
         }
@@ -303,10 +397,10 @@ const FrameCountType UnitData::getFinishTime(const PrerequisiteSet & set) const
     return _progress.whenActionsFinished(set);
 }
 
-const FrameCountType UnitData::getTimeUntilBuildingFree(const ActionType & action) const
-{
-    return _buildings.timeUntilFree(action);
-}
+//const FrameCountType UnitData::getTimeUntilBuildingFree(const ActionType & action) const
+//{
+//    return _buildings.timeUntilFree(action);
+//}
 
 const FrameCountType UnitData::getFinishTime(const ActionType & action) const
 {

@@ -48,7 +48,7 @@ class GameState
     ResourceCountType           _minerals; 			        // current mineral count
     ResourceCountType           _gas;						// current gas count
 
-    Vec<ActionPerformed, 100>   _actionsPerformed;
+    std::vector<ActionPerformed>   _actionsPerformed;
 
     const FrameCountType        raceSpecificWhenReady(const ActionType & a) const;
     void                        fixZergUnitMasks();
@@ -56,9 +56,10 @@ class GameState
     const FrameCountType        whenSupplyReady(const ActionType & action)                              const;
     const FrameCountType        whenPrerequisitesReady(const ActionType & action)                       const;
     const FrameCountType        whenBuildingPrereqReady(const ActionType & action)                      const;
-    const FrameCountType        whenConstructedBuildingReady(const ActionType & builder)                const;
+    //const FrameCountType        whenConstructedBuildingReady(const ActionType & builder)                const;
     const FrameCountType        whenMineralsReady(const ActionType & action)                            const;
     const FrameCountType        whenGasReady(const ActionType & action)                                 const;
+    const FrameCountType        whenWorkerReady(const ActionType & action)                              const;
 
 public: 
 
@@ -67,18 +68,19 @@ public:
 // constructor based on BWAPI::Game only makes sense if using VS
 // we won't be using this if we're compiling to emscripten or linux
 #ifdef _MSC_VER
-    GameState(BWAPI::GameWrapper & game, BWAPI::PlayerInterface * player);
+    GameState(BWAPI::GameWrapper & game, BWAPI::PlayerInterface * player, const std::vector<BWAPI::UnitType> & buildingsQueued);
 #endif
 
-    void                        doAction(const ActionType & action);
-    void                        fastForward(const FrameCountType toFrame) ;
+	std::vector<ActionType>     doAction(const ActionType & action);
+    std::vector<ActionType>     fastForward(const FrameCountType toFrame) ;
     void                        finishNextActionInProgress();
 
     const FrameCountType        getCurrentFrame()                                                       const;
     const FrameCountType        whenCanPerform(const ActionType & action)                               const;
     const FrameCountType        getLastActionFinishTime()                                               const;
 
-    void                        getAllLegalActions(ActionSet & actions)                   const;
+    void                        getAllLegalActions(ActionSet & actions)                                 const;
+    std::string                 whyIsNotLegal(const ActionType & action)                                const;
     bool                        isLegal(const ActionType & action)                                      const;
     bool                        canAfford(const ActionType & action)                                    const;
     bool                        canAffordGas(const ActionType & action)                                 const;
@@ -109,5 +111,6 @@ public:
     void                        setMinerals(const ResourceCountType & minerals);
     void                        setGas(const ResourceCountType & gas);
     void                        addCompletedAction(const ActionType & action, const size_t num = 1);
+	void                        removeCompletedAction(const ActionType & action, const size_t num = 1);
 };
 }

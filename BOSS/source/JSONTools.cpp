@@ -95,37 +95,37 @@ GameState JSONTools::GetGameState(const rapidjson::Value & stateVal)
     return state;
 }
 
-std::vector<ActionType> JSONTools::GetBuildOrder(const std::string & jsonString)
+BuildOrder JSONTools::GetBuildOrder(const std::string & jsonString)
 {
     rapidjson::Document document;
     JSONTools::ParseJSONString(document, jsonString);
     return GetBuildOrder(document);
 }
 
-std::vector<ActionType> JSONTools::GetBuildOrder(const rapidjson::Value & stateVal)
+BuildOrder JSONTools::GetBuildOrder(const rapidjson::Value & stateVal)
 {
     BOSS_ASSERT(stateVal.IsArray(), "Build order isn't an array");
     
-    std::vector<ActionType> buildOrder;
+    BuildOrder buildOrder;
 
     for (size_t i(0); i < stateVal.Size(); ++i)
     {
         BOSS_ASSERT(stateVal[i].IsString(), "Build order item is not a string");
 
-        buildOrder.push_back(ActionTypes::GetActionType(stateVal[i].GetString()));
+        buildOrder.add(ActionTypes::GetActionType(stateVal[i].GetString()));
     }
     
     return buildOrder;
 }
 
-DFBB_BuildOrderSearchGoal JSONTools::GetBuildOrderSearchGoal(const std::string & jsonString)
+BuildOrderSearchGoal JSONTools::GetBuildOrderSearchGoal(const std::string & jsonString)
 {
     rapidjson::Document document;
     JSONTools::ParseJSONString(document, jsonString);
     return GetBuildOrderSearchGoal(document);
 }
 
-DFBB_BuildOrderSearchGoal JSONTools::GetBuildOrderSearchGoal(const rapidjson::Value & val)
+BuildOrderSearchGoal JSONTools::GetBuildOrderSearchGoal(const rapidjson::Value & val)
 {
     BOSS_ASSERT(val.HasMember("race") && val["race"].IsString(), "State doesn't have a race");
     
@@ -133,7 +133,7 @@ DFBB_BuildOrderSearchGoal JSONTools::GetBuildOrderSearchGoal(const rapidjson::Va
 
     BOSS_ASSERT(race != Races::None, "Unknown race (make sure to use a single upper case): %s", val["race"].GetString());
 
-    DFBB_BuildOrderSearchGoal goal(race);
+    BuildOrderSearchGoal goal(race);
 
     if (val.HasMember("goal") && val["goal"].IsArray())
     {
@@ -160,4 +160,20 @@ DFBB_BuildOrderSearchGoal JSONTools::GetBuildOrderSearchGoal(const rapidjson::Va
     }
 
     return goal;
+}
+
+std::string JSONTools::GetBuildOrderString(const std::vector<ActionType> & buildOrder)
+{
+    std::stringstream ss;
+
+    ss << "\"Test Build\" : [";
+
+    for (size_t i(0); i < buildOrder.size(); ++i)
+    {
+        ss << "\"" << buildOrder[i].getName() << "\"" << (i < buildOrder.size() - 1 ? ", " : "");
+    }
+
+    ss << "]";
+
+    return ss.str();
 }

@@ -47,16 +47,12 @@ public:
 
 	BuildingData();
 
-    void morphBuilding(const ActionType & from, const ActionType & to);
 	void addBuilding(const ActionType & action, const ActionType & addon);
+	void removeBuilding(const ActionType & action, const ActionType & addon);
 	void addBuilding(const ActionType & action, const FrameCountType timeUntilFree, const ActionType & constructing, const ActionType & addon);
 
 	const BuildingStatus & getBuilding(const UnitCountType i) const;
 	
-	// gets the time until building of type t is free
-	// this will only ever be called if t exists, so min will always be set to a lower value
-	FrameCountType timeUntilFree(const ActionType & action) const;
-
     const FrameCountType getTimeUntilCanBuild(const ActionType & action) const;
 
 	// queue an action
@@ -67,5 +63,7 @@ public:
 
     const bool canBuildNow(const ActionType & action) const;
     const bool canBuildEventually(const ActionType & action) const;
+
+    std::string toString() const;
 };
 }

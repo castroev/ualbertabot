@@ -1,187 +1,51 @@
 #include "BOSS.h"
+#include "BOSSParameters.h"
+#include "BOSSExperiments.h"
+
+#include "CImg/CImg.h"
 
 using namespace BOSS;
+using namespace cimg_library;
 
-GameState getInitialState(const RaceID race)
+int main2() 
 {
-    GameState initialState(race);
-    initialState.setStartingState();
+    CImg<unsigned char> image("logo.bmp");
+    CImg<unsigned char> visu(500,400,1,3,0);
 
-    if (false)//race == Races::Protoss)
+    const unsigned char red[]   = {255,0,0};
+    const unsigned char green[] = {0,255,0};
+    const unsigned char blue[]  = {0,0,255};
+
+    image.blur(2.5);
+    CImgDisplay main_disp(image,"Click a point");
+    CImgDisplay draw_disp(visu,"Intensity profile");
+
+    while (!main_disp.is_closed() && !draw_disp.is_closed()) 
     {
-        initialState.doAction(ActionTypes::GetActionType("Protoss_Probe"));
-        initialState.doAction(ActionTypes::GetActionType("Protoss_Probe"));
-        initialState.doAction(ActionTypes::GetActionType("Protoss_Probe"));
-        initialState.doAction(ActionTypes::GetActionType("Protoss_Probe"));
-        initialState.doAction(ActionTypes::GetActionType("Protoss_Pylon"));
+        main_disp.wait();
+        if (main_disp.button() && main_disp.mouse_y()>=0) 
+        {
+            const int y = main_disp.mouse_y();
+            visu.fill(0).draw_graph(image.get_crop(0,y,0,0,image.width()-1,y,0,0),red,1,1,0,255,0);
+            visu.draw_graph(image.get_crop(0,y,0,1,image.width()-1,y,0,1),green,1,1,0,255,0);
+            visu.draw_graph(image.get_crop(0,y,0,2,image.width()-1,y,0,2),blue,1,1,0,255,0).display(draw_disp);
+        }
     }
 
-    return initialState;
+    return 0;
 }
 
-ActionSet getRelevantActions(const RaceID race)
-{
-    ActionSet actions;
-
-    if (race == Races::Protoss)
-    {
-        actions.add(ActionTypes::GetActionType("Protoss_Probe"));
-        actions.add(ActionTypes::GetActionType("Protoss_Pylon"));
-        actions.add(ActionTypes::GetActionType("Protoss_Nexus"));
-        actions.add(ActionTypes::GetActionType("Protoss_Assimilator"));
-        actions.add(ActionTypes::GetActionType("Protoss_Zealot"));
-        actions.add(ActionTypes::GetActionType("Protoss_Gateway"));
-        actions.add(ActionTypes::GetActionType("Protoss_Dragoon"));
-        actions.add(ActionTypes::GetActionType("Protoss_Cybernetics_Core"));
-    }
-
-    return actions;
-}
-
-CombatSearchParameters getParams(const RaceID race)
-{
-    CombatSearchParameters params;
-
-    if (race == Races::Protoss)
-    {
-        params.setMaxActions(ActionTypes::GetActionType("Protoss_Probe"), 12);
-        params.setMaxActions(ActionTypes::GetActionType("Protoss_Nexus"), 1);
-        params.setMaxActions(ActionTypes::GetActionType("Protoss_Assimilator"), 1);
-        params.setMaxActions(ActionTypes::GetActionType("Protoss_Cybernetics_Core"), 1);
-        params.setMaxActions(ActionTypes::GetActionType("Protoss_Pylon"), 4);
-        params.setMaxActions(ActionTypes::GetActionType("Protoss_Gateway"), 3);
-
-        params.setRelevantActions(getRelevantActions(Races::Protoss));
-    }
-
-    return params;
-}
-
-void testCombatSearch()
-{
-    RaceID race = Races::Protoss;
-    CombatSearchParameters params = getParams(race);
-    params.setInitialState(getInitialState(race));
-    params.setFrameTimeLimit(3000);
-
-    //params.setSearchTimeLimit(100);
-    
-    Timer t;
-    t.start();
-
-    CombatSearch tcs(params);
-    tcs.search();
-
-    double ms = t.getElapsedTimeInMilliSec();
-    std::cout << "\nNormal " << tcs.getResults().nodesExpanded << " nodes searched in " << ms << "ms (" << (unsigned long long)(tcs.getResults().nodesExpanded / ms) << "k nodes/s)\n\n";
-
-    for (size_t a(0); a<tcs.getResults().buildOrder.size(); ++a)
-    {
-        std::cout << tcs.getResults().buildOrder[a].getName() << "\n";
-    }
-}
-
-void testNaiveBuildOrder()
-{
-    GameState initialState(Races::Protoss);
-    initialState.setStartingState();
-    GameState initialStateNew(initialState);
-    DFBB_BuildOrderSearchGoal goal(initialState.getRace());
-
-    goal.setGoal(ActionTypes::GetActionType("Protoss_Zealot"), 3);
-
-    Timer t;
-    t.start();
-    std::vector<ActionType> buildOrder = Tools::GetNaiveBuildOrder(initialStateNew, goal);
-    double ms = t.getElapsedTimeInMilliSec();
-
-    Timer tnew;
-    tnew.start();
-    std::vector<ActionType> buildOrderNew = Tools::GetOptimizedNaiveBuildOrder(initialStateNew, goal);
-    double msnew = tnew.getElapsedTimeInMilliSec();
-
-    for (size_t i(0); i<buildOrder.size(); ++i)
-    {
-        std::cout << buildOrder[i].getName() << std::endl;
-        initialState.doAction(buildOrder[i]);
-    }
-
-    std::cout << "Build order took " << initialState.getLastActionFinishTime() << " frames to complete in " << ms << " ms\n\n" << std::endl;
-
-    for (size_t i(0); i<buildOrderNew.size(); ++i)
-    {
-        std::cout << buildOrderNew[i].getName() << std::endl;
-        initialStateNew.doAction(buildOrderNew[i]);
-    }
-
-    std::cout << "New build order took " << initialStateNew.getLastActionFinishTime() << " frames to complete with " << initialStateNew.getUnitData().getNumTotal(ActionTypes::GetWorker(initialStateNew.getRace())) << " total workers in " << msnew << " ms" << std::endl;
-}
-
-void oldMain()
-{
-    GameState initialState(Races::Protoss);
-    initialState.setStartingState();
-    
-    DFBB_BuildOrderSmartSearch smartSearch(initialState.getRace());
-    smartSearch.setState(initialState);
-    smartSearch.addGoal(ActionTypes::GetActionType("Protoss_Zealot"), 6);
-    smartSearch.getParameters().goal.printGoal();
-    smartSearch.setTimeLimit(50000);
-    
-    Timer t;
-    t.start();
-    while (!smartSearch.getResults().solved)
-    {
-        smartSearch.search();
-    }
-
-    double ms = t.getElapsedTimeInMilliSec();
-
-    smartSearch.getResults().printResults(true);
-    std::cout << std::endl << "Search Took: " << ms << "ms" << std::endl;
-
-    //Tools::TestBuildOrderUpperBound();
-
-    //testCombatSearch();
-    //testThreadCombatSearch();
-}
-
-#ifdef EMSCRIPTEN
-#include <emscripten.h>
-#endif
-
-#include "GUI.h"
-void mainLoop()
-{
-    GUI::Instance().OnFrame();
-}
-
-#include "BOSSExperiments.h"
 int main(int argc, char *argv[])
 {
+    // Initialize all the BOSS internal data
     BOSS::init();
 
-#ifndef EMSCRIPTEN
-    BOSS::BOSSExperiments experiments("../asset/config/config.txt");
-#else
-    BOSS::BOSSExperiments experiments("asset/config/config.txt");
-#endif
+    // Read in the config parameters that will be used for experiments
+    BOSS::BOSSParameters::Instance().ParseParameters("BOSS_Config.txt");
     
-    if (experiments.getVisExperiments().size() > 0)
-    {
-        GUI::Instance().OnStart();
-        GUI::Instance().SetVisExperiment(experiments.getVisExperiments()[0]);
-    }
-
-#ifndef EMSCRIPTEN
-    while (true)
-    {
-        mainLoop();
-    }
-#else
-    emscripten_set_main_loop(mainLoop,0,true);
-#endif
-
+    // Run the experiments
+    BOSS::Experiments::RunExperiments("BOSS_Config.txt");
+    
     return 0;
 }
 

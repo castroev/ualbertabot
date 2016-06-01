@@ -27,6 +27,10 @@ void DFBB_BuildOrderStackSearch::search()
         if (_firstSearch)
         {
             _results.upperBound = _params.initialUpperBound ? _params.initialUpperBound : Tools::GetUpperBound(_params.initialState, _params.goal);
+            
+            // add one frame to the upper bound so our strictly lesser than check still works if we have an exact upper bound
+            _results.upperBound += 1;
+
             _stack[0].state = _params.initialState;
             _firstSearch = false;
             //BWAPI::Broodwar->printf("Upper bound is %d", _results.upperBound);
@@ -63,13 +67,15 @@ const DFBB_BuildOrderSearchResults & DFBB_BuildOrderStackSearch::getResults() co
 void DFBB_BuildOrderStackSearch::generateLegalActions(const GameState & state, ActionSet & legalActions)
 {
     legalActions.clear();
-    DFBB_BuildOrderSearchGoal & goal = _params.goal;
+    BuildOrderSearchGoal & goal = _params.goal;
     const ActionType & worker = ActionTypes::GetWorker(state.getRace());
     
     // add all legal relevant actions that are in the goal
     for (size_t a(0); a < _params.relevantActions.size(); ++a)
     {
         const ActionType & actionType = _params.relevantActions[a];
+        const std::string & actionName = actionType.getName();
+        const size_t numTotal = state.getUnitData().getNumTotal(actionType);
 
         if (state.isLegal(actionType))
         {
@@ -79,28 +85,20 @@ void DFBB_BuildOrderStackSearch::generateLegalActions(const GameState & state, A
                 continue;
             }
 
-            // if we alread have more than the goal it's not legal
-            if (goal.getGoal(actionType) && (state.getUnitData().getNumTotal(actionType) >= goal.getGoal(actionType)))
+            // if we already have more than the goal it's not legal
+            if (goal.getGoal(actionType) && (numTotal >= goal.getGoal(actionType)))
             {
                 continue;
             }
 
             // if we already have more than the goal max it's not legal
-            if (goal.getGoalMax(actionType) && (state.getUnitData().getNumTotal(actionType) >= goal.getGoalMax(actionType)))
+            if (goal.getGoalMax(actionType) && (numTotal >= goal.getGoalMax(actionType)))
             {
                 continue;
             }
             
             legalActions.add(_params.relevantActions[a]);
         }
-    }
-
-    // don't make anything until we have 8 workers
-    if (state.getUnitData().getNumTotal(worker) < 8)
-    {
-        legalActions.clear();
-        legalActions.add(worker);
-        return;
     }
 
     // if we enabled the supply bounding flag
@@ -238,6 +236,7 @@ SEARCH_BEGIN:
         }
 
         REPETITIONS = getRepetitions(STATE, ACTION_TYPE);
+        BOSS_ASSERT(REPETITIONS > 0, "Can't have zero repetitions!");
                 
         // do the action as many times as legal to to 'repeat'
         CHILD_STATE = STATE;
@@ -246,7 +245,7 @@ SEARCH_BEGIN:
         {
             if (CHILD_STATE.isLegal(ACTION_TYPE))
             {
-                _buildOrder.push_back(ACTION_TYPE);
+                _buildOrder.add(ACTION_TYPE);
                 CHILD_STATE.doAction(ACTION_TYPE);
             }
             else
@@ -255,7 +254,7 @@ SEARCH_BEGIN:
             }
         }
 
-        if (Tools::MeetsGoal(CHILD_STATE, _params.goal))
+        if (_params.goal.isAchievedBy(CHILD_STATE))
         {
             updateResults(CHILD_STATE);
         }

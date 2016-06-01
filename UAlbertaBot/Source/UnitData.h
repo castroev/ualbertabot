@@ -7,112 +7,73 @@ namespace UAlbertaBot
 {
 struct UnitInfo
 {
-	// we need to store all of this data because if the unit is not visible, we
-	// can't reference it from the unit pointer
+    // we need to store all of this data because if the unit is not visible, we
+    // can't reference it from the unit pointer
 
-	int					unitID;
-	int					lastHealth;
-    BWAPI::PlayerInterface *      player;
-	BWAPI::UnitInterface *		    unit;
-	BWAPI::Position		lastPosition;
-	BWAPI::UnitType		type;
-    bool                completed;
+    int             unitID;
+    int             lastHealth;
+    int             lastShields;
+    BWAPI::Player   player;
+    BWAPI::Unit     unit;
+    BWAPI::Position lastPosition;
+    BWAPI::UnitType type;
+    bool            completed;
 
-	bool canCloak() const
-	{
-		return type == BWAPI::UnitTypes::Protoss_Dark_Templar
-			|| type == BWAPI::UnitTypes::Terran_Wraith
-			|| type == BWAPI::UnitTypes::Zerg_Lurker;
-	}
-
-	bool isFlyer() const
-	{
-		return type.isFlyer();
-	}
-
-	bool isDetector() const
-	{
-		return type.isDetector();
-	}
-
-	UnitInfo()
-		: unitID(0)
-		, lastHealth(0)
-        , player(NULL)
-		, unit(NULL)
-		, lastPosition(BWAPI::Positions::None)
-		, type(BWAPI::UnitTypes::None)
+    UnitInfo()
+        : unitID(0)
+        , lastHealth(0)
+        , player(nullptr)
+        , unit(nullptr)
+        , lastPosition(BWAPI::Positions::None)
+        , type(BWAPI::UnitTypes::None)
         , completed(false)
-	{
+    {
 
-	}
+    }
 
-	UnitInfo(int id, BWAPI::UnitInterface* u, BWAPI::Position last, BWAPI::UnitType t) 
-        : unitID(id)
-        , lastHealth(u->getHitPoints() + u->getShields())
-        , player(u->getPlayer())
-		, unit(u)
-		, lastPosition(last)
-		, type(t)
-        , completed(u->isCompleted())
-	{
-		
-	}
+    const bool operator == (BWAPI::Unit unit) const
+    {
+        return unitID == unit->getID();
+    }
 
-	const bool operator == (BWAPI::UnitInterface* unit) const
-	{
-		return unitID == unit->getID();
-	}
+    const bool operator == (const UnitInfo & rhs) const
+    {
+        return (unitID == rhs.unitID);
+    }
 
-	const bool operator == (const UnitInfo & rhs) const
-	{
-		return (unitID == rhs.unitID);
-	}
-
-	const bool operator < (const UnitInfo & rhs) const
-	{
-		return (unitID < rhs.unitID);
-	}
+    const bool operator < (const UnitInfo & rhs) const
+    {
+        return (unitID < rhs.unitID);
+    }
 };
 
 typedef std::vector<UnitInfo> UnitInfoVector;
-typedef std::map<BWAPI::UnitInterface*, UnitInfo> UIMap;
-typedef UIMap::iterator UIMapIter;
-typedef UIMap::const_iterator ConstUIMapIter;
-#define FOR_EACH_UIMAP(ITER, MAP) for (UIMapIter ITER(MAP.begin()); ITER != MAP.end(); ITER++)
-#define FOR_EACH_UIMAP_CONST(ITER, MAP) for (ConstUIMapIter ITER(MAP.begin()); ITER != MAP.end(); ITER++)
+typedef std::map<BWAPI::Unit,UnitInfo> UIMap;
 
-class UnitData {
+class UnitData
+{
+    UIMap unitMap;
 
-	std::map<BWAPI::UnitInterface*, UnitInfo>		unitMap;
+    const bool badUnitInfo(const UnitInfo & ui) const;
 
-	std::vector<int>						numDeadUnits;
-	std::vector<int>						numUnits;
+    std::vector<int>						numDeadUnits;
+    std::vector<int>						numUnits;
 
-	int										mineralsLost;
-	int										gasLost;
-
-	const bool badUnitInfo(const UnitInfo & ui) const;
+    int										mineralsLost;
+    int										gasLost;
 
 public:
 
-	UnitData();
-	~UnitData() {}
+    UnitData();
 
-	void	updateUnit(BWAPI::UnitInterface* unit);
-	void	removeUnit(BWAPI::UnitInterface* unit);
-	void	removeBadUnits();
+    void	updateUnit(BWAPI::Unit unit);
+    void	removeUnit(BWAPI::Unit unit);
+    void	removeBadUnits();
 
-	void	getCloakedUnits(std::set<UnitInfo> & v)				const;
-	void	getDetectorUnits(std::set<UnitInfo> & v)			const;
-	void	getFlyingUnits(std::set<UnitInfo> & v)				const;
-	bool	hasCloakedUnits()									const;
-	bool	hasDetectorUnits()									const;
-
-	int		getGasLost()										const	{ return gasLost; }
-	int		getMineralsLost()									const	{ return mineralsLost; }
-	int		getNumUnits(BWAPI::UnitType t)						const	{ return numUnits[t.getID()]; }
-	int		getNumDeadUnits(BWAPI::UnitType t)					const	{ return numDeadUnits[t.getID()]; }
-	const	std::map<BWAPI::UnitInterface*, UnitInfo> & getUnits()		const	{ return unitMap; }
+    int		getGasLost()                                const;
+    int		getMineralsLost()                           const;
+    int		getNumUnits(BWAPI::UnitType t)              const;
+    int		getNumDeadUnits(BWAPI::UnitType t)          const;
+    const	std::map<BWAPI::Unit,UnitInfo> & getUnits() const;
 };
 }

@@ -104,6 +104,16 @@ const bool Unit::equalsID(const Unit & rhs) const
 { 
     return _unitID == rhs._unitID; 
 }
+// returns whether or not this unit can see a given unit at a given time
+bool Unit::canSeeTarget(const Unit & unit, const TimeType & gameTime) const
+{
+
+	// range of this unit attacking
+	PositionType r = type().sightRange();
+
+	// return whether the target unit is in range
+	return (r * r) >= getDistanceSqToUnit(unit, gameTime);
+}
 
 // returns whether or not this unit can attack a given unit at a given time
 const bool Unit::canAttackTarget(const Unit & unit, const TimeType & gameTime) const
@@ -158,7 +168,7 @@ void Unit::takeAttack(const Unit & attacker)
         damage *= 2;
     }
 
-    std::cout << type().getName() << " took " << (int)attacker.player() << " " << damage << "\n";
+    //std::cout << type().getName() << " took " << (int)attacker.player() << " " << damage << "\n";
 
     updateCurrentHP(_currentHP - damage);
 }
@@ -175,10 +185,10 @@ const bool Unit::isAlive() const
 }
 
 // attack a unit, set the times accordingly
-void Unit::attack(const UnitAction & move, const Unit & target, const TimeType & gameTime)
+void Unit::attack(const Action & move, const Unit & target, const TimeType & gameTime)
 {
     // if this is a repeat attack
-    if (_previousAction.type() == UnitActionTypes::ATTACK || _previousAction.type() == UnitActionTypes::RELOAD)
+    if (_previousAction.type() == ActionTypes::ATTACK || _previousAction.type() == ActionTypes::RELOAD)
     {
         // add the repeat attack animation duration
         // can't attack again until attack cooldown is up
@@ -186,7 +196,7 @@ void Unit::attack(const UnitAction & move, const Unit & target, const TimeType &
         updateAttackActionTime    (gameTime + attackCooldown());
     }
     // if there previous action was a MOVE action, add the move penalty
-    else if (_previousAction.type() == UnitActionTypes::MOVE)
+    else if (_previousAction.type() == ActionTypes::MOVE)
     {
         updateMoveActionTime      (gameTime + attackInitFrameTime() + 2);
         updateAttackActionTime    (gameTime + attackCooldown() + Constants::Move_Penalty);
@@ -208,7 +218,7 @@ void Unit::attack(const UnitAction & move, const Unit & target, const TimeType &
 }
 
 // attack a unit, set the times accordingly
-void Unit::heal(const UnitAction & move, const Unit & target, const TimeType & gameTime)
+void Unit::heal(const Action & move, const Unit & target, const TimeType & gameTime)
 {
     _currentEnergy -= healCost();
 
@@ -225,7 +235,7 @@ void Unit::heal(const UnitAction & move, const Unit & target, const TimeType & g
 }
 
 // unit update for moving based on a given Move
-void Unit::move(const UnitAction & move, const TimeType & gameTime) 
+void Unit::move(const Action & move, const TimeType & gameTime) 
 {
     _previousPosition = pos();
 
@@ -249,14 +259,14 @@ void Unit::move(const UnitAction & move, const TimeType & gameTime)
 }
 
 // unit is commanded to wait until his attack cooldown is up
-void Unit::waitUntilAttack(const UnitAction & move, const TimeType & gameTime)
+void Unit::waitUntilAttack(const Action & move, const TimeType & gameTime)
 {
     // do nothing until we can attack again
     updateMoveActionTime(_timeCanAttack);
     setPreviousAction(move, gameTime);
 }
 
-void Unit::pass(const UnitAction & move, const TimeType & gameTime)
+void Unit::pass(const Action & move, const TimeType & gameTime)
 {
     updateMoveActionTime(gameTime + Constants::Pass_Move_Duration);
     updateAttackActionTime(gameTime + Constants::Pass_Move_Duration);
@@ -277,7 +287,7 @@ const PositionType Unit::getDistanceSqToPosition(const Position & p, const TimeT
 const Position & Unit::currentPosition(const TimeType & gameTime) const
 {
     // if the previous move was MOVE, then we need to calculate where the unit is now
-    if (_previousAction.type() == UnitActionTypes::MOVE)
+    if (_previousAction.type() == ActionTypes::MOVE)
     {
         // if gameTime is equal to previous move time then we haven't moved yet
         if (gameTime == _previousActionTime)
@@ -368,7 +378,7 @@ void Unit::setUnitID(const IDType & id)
     _unitID = id; 
 }
 
-void Unit::setPreviousAction(const UnitAction & m, const TimeType & previousMoveTime) 
+void Unit::setPreviousAction(const Action & m, const TimeType & previousMoveTime) 
 {	
     // if it was an attack move, store the unitID of the opponent unit
     _previousAction = m;
@@ -535,7 +545,7 @@ const BWAPI::UnitType Unit::type() const
     return _unitType; 
 }
 
-const UnitAction & Unit::previousAction() const 
+const Action & Unit::previousAction() const 
 { 
     return _previousAction; 
 }

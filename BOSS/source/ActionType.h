@@ -37,8 +37,9 @@ public:
     const PrerequisiteSet &     getRecursivePrerequisites()      const;
 	int                         getType()               const;
 	
-	std::string                 getName()               const;
-	std::string                 getMetaName()           const;
+	const std::string &         getName()               const;
+    const std::string &         getShortName()          const;
+	const std::string &         getMetaName()           const;
 	
 	FrameCountType              buildTime()             const;
 	ResourceCountType           mineralPrice()          const;
@@ -64,6 +65,7 @@ public:
     bool                        isAddon()               const;
     bool                        requiresAddon()         const;
     bool                        isMorphed()             const;
+    bool                        canBuild(const ActionType & t) const;
     ActionType                  requiredAddonType()     const;
 
     const bool operator == (const ActionType & rhs)     const;
